@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Synora Extension</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">Synora</span>
+          <span class="brand-badge">Extension</span>
+        </div>
+      </div>
+      <div class="version-badge" id="versionBadge">v1.0.0</div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="content">
+      <!-- Section 1: Extension & Site Status -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Active Site</span>
+          <span class="status-indicator" id="siteStatusDot"></span>
+        </div>
+        <div class="site-info" id="siteInfoText">Checking current tab...</div>
+        <div class="site-subtext" id="siteSubtext">Supported sites: Netflix & Synora Watch Party</div>
+      </div>
+
+      <!-- Section 2: Watch Party Room Connection -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Watch Party Connection</span>
+          <span class="pill" id="connectionPill">Disconnected</span>
+        </div>
+
+        <div id="connectedState" class="connected-box hidden">
+          <div class="room-display">
+            <span class="label">Current Room:</span>
+            <strong class="room-id" id="displayRoomId">------</strong>
+          </div>
+          <button type="button" id="disconnectBtn" class="btn btn-secondary">Disconnect</button>
+        </div>
+
+        <div id="disconnectedState" class="disconnected-box">
+          <p class="helper-text">Connect to a Watch Party room to synchronize with friends.</p>
+          <div class="input-group">
+            <input type="text" id="roomInput" placeholder="Enter Room Code (e.g. AB12CD)" maxlength="12" spellcheck="false" autocomplete="off" />
+            <button type="button" id="connectBtn" class="btn btn-primary">Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="footer-actions">
+        <button type="button" id="openAppBtn" class="link-button">
+          Open Watch Party App ↗
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

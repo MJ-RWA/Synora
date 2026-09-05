@@ -1,0 +1,358 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account information",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "favorites": { "type": "array", "items": { "type": "string" } },
+        "history": { "type": "array", "items": { "type": "string" } },
+        "friends": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "email", "role"]
+    },
+    "Movie": {
+      "title": "Movie",
+      "description": "Movie details and links",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "poster": { "type": "string" },
+        "category": { "type": "string" },
+        "year": { "type": "number" },
+        "downloadLinks": {
+          "type": "object",
+          "properties": {
+            "mirror1": { "type": "string" },
+            "mirror2": { "type": "string" },
+            "mirror3": { "type": "string" }
+          }
+        },
+        "streamLinks": { "type": "array", "items": { "type": "string" } },
+        "size": { "type": "string" },
+        "views": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "category", "year"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Live football match details",
+      "type": "object",
+      "properties": {
+        "team1": { "type": "string" },
+        "team2": { "type": "string" },
+        "league": { "type": "string" },
+        "time": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["upcoming", "live", "finished"] },
+        "streamLink": { "type": "string" },
+        "thumbnail": { "type": "string" }
+      },
+      "required": ["team1", "team2", "time", "status"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "User comments on movies",
+      "type": "object",
+      "properties": {
+        "movieId": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["movieId", "userId", "text"]
+    },
+    "Ad": {
+      "title": "Ad",
+      "description": "Advertisement details",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["banner", "popup", "video"] },
+        "imageUrl": { "type": "string" },
+        "link": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["type", "link"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Movie or Stream category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "slug": { "type": "string" }
+      },
+      "required": ["name", "slug"]
+    },
+    "Stream": {
+      "title": "Stream",
+      "description": "General stream link",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "streamLink": { "type": "string" },
+        "type": { "type": "string", "enum": ["hls", "mp4", "iframe"] },
+        "category": { "type": "string" }
+      },
+      "required": ["title", "streamLink", "type"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Live chat message for matches",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["matchId", "userId", "text", "username"]
+    },
+    "Series": {
+      "title": "Series",
+      "description": "TV Show details",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "poster": { "type": "string" },
+        "seasons": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "description", "poster", "seasons"]
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "TV Show episode details",
+      "type": "object",
+      "properties": {
+        "seriesId": { "type": "string" },
+        "seriesTitle": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "episodeNumber": { "type": "number" },
+        "seasonNumber": { "type": "number" },
+        "year": { "type": "number" },
+        "rating": { "type": "string" },
+        "airDate": { "type": "string" },
+        "poster": { "type": "string" },
+        "thumbnail": { "type": "string" },
+        "trailer": { "type": "string" },
+        "streamLink": { "type": "string" },
+        "embed": { "type": "string" },
+        "mp4": { "type": "string" },
+        "m3u8": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "subtitle1": { "type": "string" },
+        "subtitle2": { "type": "string" },
+        "mirror1": { "type": "string" },
+        "mirror2": { "type": "string" },
+        "mirror3": { "type": "string" },
+        "mirrors": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["seriesId", "seriesTitle", "title", "episodeNumber", "seasonNumber", "poster", "streamLink"]
+    },
+    "ContentRequest": {
+      "title": "ContentRequest",
+      "description": "User request for new content",
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "fulfilled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["query", "status", "createdAt"]
+    },
+    "WatchRoom": {
+      "title": "WatchRoom",
+      "description": "Real-time watch party room",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "movieId": { "type": "string" },
+        "seriesId": { "type": "string" },
+        "episodeId": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "currentTime": { "type": "number" },
+        "isPlaying": { "type": "boolean" },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "subtitle": { "type": "string" },
+        "usersCount": { "type": "number" },
+        "isScreenSharing": { "type": "boolean" },
+        "screenHostId": { "type": "string" }
+      },
+      "required": ["title", "videoUrl", "currentTime", "isPlaying", "hostId", "hostName", "createdAt", "usersCount"]
+    },
+    "VoiceSignal": {
+      "title": "VoiceSignal",
+      "description": "WebRTC signaling data",
+      "type": "object",
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "signal": { "type": "string" },
+        "type": { "type": "string", "enum": ["offer", "answer", "candidate"] },
+        "time": { "type": "string", "format": "date-time" }
+      },
+      "required": ["from", "to", "signal", "type", "time"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Friend request between users",
+      "type": "object",
+      "properties": {
+        "from": { "type": "string" },
+        "fromUsername": { "type": "string" },
+        "to": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "time": { "type": "string", "format": "date-time" }
+      },
+      "required": ["from", "fromUsername", "to", "status", "time"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification",
+      "type": "object",
+      "properties": {
+        "toUser": { "type": "string" },
+        "type": { "type": "string", "enum": ["invite", "friend_request", "general"] },
+        "roomId": { "type": "string" },
+        "message": { "type": "string" },
+        "read": { "type": "boolean" },
+        "time": { "type": "string", "format": "date-time" }
+      },
+      "required": ["toUser", "type", "message", "read", "time"]
+    },
+    "HistoryItem": {
+      "title": "HistoryItem",
+      "description": "Watch history entry",
+      "type": "object",
+      "properties": {
+        "contentId": { "type": "string" },
+        "title": { "type": "string" },
+        "poster": { "type": "string" },
+        "type": { "type": "string", "enum": ["movie", "series"] },
+        "videoUrl": { "type": "string" },
+        "currentTime": { "type": "number" },
+        "duration": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contentId", "title", "type", "videoUrl", "currentTime", "duration", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/movies/{movieId}": {
+      "schema": "Movie",
+      "description": "Movie database"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Football matches"
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Movie comments"
+    },
+    "/ads/{adId}": {
+      "schema": "Ad",
+      "description": "Ad system"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Categories"
+    },
+    "/streams/{streamId}": {
+      "schema": "Stream",
+      "description": "General streams"
+    },
+    "/chatMessages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Live chat messages"
+    },
+    "/series/{seriesId}": {
+      "schema": "Series",
+      "description": "TV Shows"
+    },
+    "/series/{seriesId}/episodes/{episodeId}": {
+      "schema": "Episode",
+      "description": "TV Show episodes (legacy)"
+    },
+    "/episodes/{episodeId}": {
+      "schema": "Episode",
+      "description": "TV Show episodes"
+    },
+    "/content_requests/{requestId}": {
+      "schema": "ContentRequest",
+      "description": "User requests for content"
+    },
+    "/watchRooms/{roomId}": {
+      "schema": "WatchRoom",
+      "description": "Watch party rooms"
+    },
+    "/watchRooms/{roomId}/messages/{messageId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "username": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Chat messages in room"
+    },
+    "/watchRooms/{roomId}/users/{userId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "username": { "type": "string" },
+          "isHost": { "type": "boolean" },
+          "joinedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Users in room"
+    },
+    "/watchRooms/{roomId}/reactions/{reactionId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "emoji": { "type": "string" },
+          "username": { "type": "string" },
+          "time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Emoji reactions in room"
+    },
+    "/watchRooms/{roomId}/voiceSignals/{signalId}": {
+      "schema": "VoiceSignal",
+      "description": "WebRTC signaling for voice chat"
+    },
+    "/friendRequests/{requestId}": {
+      "schema": "FriendRequest",
+      "description": "Friend requests"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    },
+    "/users/{userId}/history/{itemId}": {
+      "schema": "HistoryItem",
+      "description": "User watch history"
+    }
+  }
+}

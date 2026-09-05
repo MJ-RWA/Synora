@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Synora Watch Party Bridge",
+  "short_name": "Synora Bridge",
+  "version": "1.0.0",
+  "description": "Connects supported streaming playback with Synora Watch Party rooms.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "Synora Watch Party Bridge"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://localhost/*",
+        "*://*.run.app/*"
+      ],
+      "js": ["content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*.netflix.com/*",
+    "*://localhost/*",
+    "*://*.run.app/*"
+  ]
+}

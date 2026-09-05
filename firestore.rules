@@ -1,0 +1,311 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // User: { username: string, email: string, role: string, favorites: array, history: array, createdAt: timestamp }
+    // Movie: { title: string, description: string, poster: string, category: string, year: number, downloadLinks: map, streamLinks: array, size: string, views: number, createdAt: timestamp }
+    // Match: { team1: string, team2: string, league: string, time: timestamp, status: string, streamLink: string, thumbnail: string }
+    // Comment: { movieId: string, userId: string, username: string, text: string, createdAt: timestamp }
+    // Ad: { type: string, imageUrl: string, link: string, active: bool }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+        request.auth.token.email == "believeinsomething2421@gmail.com" && 
+        request.auth.token.email_verified == true;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(['username', 'email', 'role', 'favorites', 'history', 'friends', 'createdAt', 'uid', 'photoURL']) &&
+             data.username is string && data.username.size() > 0 && data.username.size() < 100 &&
+             data.email is string && data.role in ['user', 'admin'] &&
+             (!('friends' in data) || data.friends is list) &&
+             (!('favorites' in data) || data.favorites is list) &&
+             (!('history' in data) || data.history is list);
+    }
+
+    function isValidMovie(data) {
+      return data.title is string && data.title.size() > 0 &&
+             data.category is string &&
+             data.year is number;
+    }
+
+    function isValidMatch(data) {
+      return data.team1 is string && data.team2 is string &&
+             data.status in ['upcoming', 'live', 'finished'];
+    }
+
+    function isValidComment(data) {
+      return data.movieId is string && data.userId is string &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000;
+    }
+
+    function isValidChatMessage(data) {
+      return data.matchId is string && data.userId is string &&
+             data.username is string &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 500;
+    }
+
+    function isValidSeries(data) {
+      return data.title is string && data.title.size() > 0 &&
+             data.description is string &&
+             data.poster is string &&
+             data.seasons is number;
+    }
+
+    function isValidEpisode(data) {
+      return data.seriesId is string &&
+             data.seriesTitle is string &&
+             data.title is string && data.title.size() > 0 &&
+             data.episodeNumber is number &&
+             data.seasonNumber is number &&
+             (data.poster is string || data.thumbnail is string) &&
+             data.streamLink is string;
+    }
+
+    function isValidContentRequest(data) {
+      return data.query is string && data.query.size() > 0 && data.query.size() < 200 &&
+             data.status in ['pending', 'fulfilled'] &&
+             data.createdAt is string;
+    }
+
+    function isValidWatchRoom(data) {
+      return data.keys().hasAll(['title', 'hostId', 'hostName', 'createdAt', 'usersCount', 'isActive']) &&
+             data.title is string && data.title.size() > 0 &&
+             data.hostId == request.auth.uid &&
+             data.hostName is string &&
+             (data.createdAt is string || data.createdAt is timestamp) &&
+             data.usersCount is number &&
+             data.isActive is bool;
+    }
+
+    function isValidWatchRoomMessage(data) {
+      return data.keys().hasAll(['text', 'username', 'timestamp']) &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 100;
+    }
+
+    function isValidWatchRoomUser(data) {
+      return data.keys().hasAll(['username', 'isHost', 'joinedAt']) &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
+             data.isHost is bool &&
+             (!('uid' in data) || data.uid == null || data.uid is string) &&
+             (!('speaking' in data) || data.speaking is bool);
+    }
+
+    function isValidWatchRoomUserUpdate(data) {
+      return (!('username' in data) || (data.username is string && data.username.size() > 0 && data.username.size() <= 100)) &&
+             (!('isHost' in data) || data.isHost is bool) &&
+             (!('uid' in data) || data.uid == null || data.uid is string) &&
+             (!('speaking' in data) || data.speaking is bool);
+    }
+
+    function isValidWatchRoomReaction(data) {
+      return data.keys().hasAll(['emoji', 'username', 'time']) &&
+             data.emoji is string && data.emoji.size() > 0 && data.emoji.size() < 10 &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 100;
+    }
+
+    function isValidWatchRoomTyping(data) {
+      return data.keys().hasAll(['lastTyped', 'username', 'uid']) &&
+             data.lastTyped is string &&
+             data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
+             data.uid is string;
+    }
+
+    function isValidHistoryItem(data) {
+      return data.keys().hasAll(['contentId', 'title', 'type', 'videoUrl', 'currentTime', 'duration', 'updatedAt']) &&
+             data.contentId is string &&
+             data.title is string &&
+             data.type in ['movie', 'series'] &&
+             data.videoUrl is string &&
+             data.currentTime is number &&
+             data.duration is number &&
+             data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /test/{testId} {
+      allow read: if true;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated(); // Allow all authenticated users to read for search
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
+        (request.resource.data.role == 'user' || isSuperAdmin());
+      allow update: if isAuthenticated() && 
+        (
+          (isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isSuperAdmin())) ||
+          (isAdmin() && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isSuperAdmin()))
+        );
+
+      match /playlists/{playlistId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && request.resource.data.name is string;
+        allow update: if isOwner(userId) && request.resource.data.name is string;
+        allow delete: if isOwner(userId) || isAdmin();
+
+        match /items/{itemId} {
+          allow read: if isOwner(userId) || isAdmin();
+          allow create: if isOwner(userId);
+          allow delete: if isOwner(userId) || isAdmin();
+        }
+      }
+
+      match /watchLater/{itemId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /history/{itemId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidHistoryItem(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /movies/{movieId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidMovie(request.resource.data);
+    }
+
+    match /matches/{matchId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidMatch(request.resource.data);
+    }
+
+    match /comments/{commentId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && isValidComment(request.resource.data);
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.userId);
+    }
+
+    match /chatMessages/{messageId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && isValidChatMessage(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /ads/{adId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /streams/{streamId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /series/{seriesId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidSeries(request.resource.data);
+      
+      match /episodes/{episodeId} {
+        allow read: if true;
+        allow write: if isAdmin() && isValidEpisode(request.resource.data);
+      }
+    }
+
+    match /episodes/{episodeId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidEpisode(request.resource.data);
+    }
+
+    match /content_requests/{requestId} {
+      allow read: if isAdmin();
+      allow create: if true && isValidContentRequest(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /watchRooms/{roomId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidWatchRoom(request.resource.data);
+      allow update: if 
+        (
+          // Host can update everything
+          (isAuthenticated() && request.auth.uid == resource.data.hostId) ||
+          // Any joining user/participant can update usersCount
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usersCount']))
+        );
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.hostId);
+
+      match /messages/{messageId} {
+        allow read: if true;
+        allow create: if isValidWatchRoomMessage(request.resource.data);
+      }
+
+      match /users/{userId} {
+        allow read: if true;
+        allow create: if (isAuthenticated() && request.auth.uid == userId && isValidWatchRoomUser(request.resource.data)) || (request.auth == null && isValidWatchRoomUser(request.resource.data));
+        allow update: if (isAuthenticated() && request.auth.uid == userId && isValidWatchRoomUserUpdate(request.resource.data)) || (request.auth == null && isValidWatchRoomUserUpdate(request.resource.data));
+        allow delete: if (isAuthenticated() && (request.auth.uid == userId || request.auth.uid == get(/databases/$(database)/documents/watchRooms/$(roomId)).data.hostId)) || (request.auth == null);
+      }
+
+      match /reactions/{reactionId} {
+        allow read: if true;
+        allow create: if isValidWatchRoomReaction(request.resource.data);
+      }
+
+      match /typing/{typingId} {
+        allow read: if true;
+        allow create, update, delete: if true;
+      }
+
+      match /signals/{signalId} {
+        allow read, write: if true;
+      }
+
+      match /voiceSignals/{signalId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /friendRequests/{requestId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.from;
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.to;
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && request.auth.uid == resource.data.toUser;
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.toUser;
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.toUser;
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+  }
+}

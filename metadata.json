@@ -1,0 +1,13 @@
+{
+  "name": "Synora",
+  "description": "Dedicated social Watch Party platform for creating rooms, synchronizing video streams, real-time voice and text chat, emoji reactions, and live screen sharing.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

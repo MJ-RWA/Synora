@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#080c12" />
+      <stop offset="50%" stop-color="#0e1726" />
+      <stop offset="100%" stop-color="#05080d" />
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="50%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect width="504" height="504" x="4" y="4" rx="108" fill="none" stroke="#10b981" stroke-width="2" stroke-opacity="0.25" />
+
+  <!-- Outer Synchronized Pulse Waves -->
+  <circle cx="256" cy="256" r="172" fill="none" stroke="url(#primaryGrad)" stroke-width="6" stroke-dasharray="16 12" opacity="0.35" />
+  <circle cx="256" cy="256" r="148" fill="none" stroke="#38bdf8" stroke-width="3" stroke-dasharray="8 8" opacity="0.4" />
+
+  <!-- Central Glow Effect -->
+  <circle cx="256" cy="256" r="96" fill="#10b981" opacity="0.12" filter="url(#glow)" />
+
+  <!-- Synora Logo: Dynamic Connected Play & Social Sync Symbol -->
+  <g transform="translate(256, 256)">
+    <!-- Primary Play Triangle with Rounded Corners -->
+    <path d="M-44,-78 L64,-10 C76,-3 76,15 64,22 L-44,90 C-58,99 -76,89 -76,73 L-76,-61 C-76,-77 -58,-87 -44,-78 Z" 
+          fill="url(#primaryGrad)" 
+          filter="url(#glow)" />
+
+    <!-- Overlapping Synchronized Forward Arc -->
+    <path d="M-6, -60 C40,-50 78,-20 86,24 C90,44 82,72 62,94" 
+          fill="none" 
+          stroke="url(#accentGrad)" 
+          stroke-width="14" 
+          stroke-linecap="round" />
+
+    <!-- Synchronized Satellite Nodes -->
+    <circle cx="88" cy="24" r="10" fill="#38bdf8" />
+    <circle cx="-44" cy="-84" r="7" fill="#6ee7b7" />
+    <circle cx="-44" cy="96" r="7" fill="#34d399" />
+  </g>
+</svg>
