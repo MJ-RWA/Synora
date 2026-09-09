@@ -156,11 +156,16 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
     }, 1200);
   }, [isPlayerReady]);
 
+  const onSyncReadyRef = useRef(onSyncReady);
   useEffect(() => {
-    if (onSyncReady) {
-      onSyncReady(executeSync);
+    onSyncReadyRef.current = onSyncReady;
+  }, [onSyncReady]);
+
+  useEffect(() => {
+    if (onSyncReadyRef.current) {
+      onSyncReadyRef.current(executeSync);
     }
-  }, [onSyncReady, executeSync]);
+  }, [executeSync]);
 
   const togglePlay = () => {
     if (!playerRef.current || !isPlayerReady) return;

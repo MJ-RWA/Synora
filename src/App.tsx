@@ -17,6 +17,7 @@ import { AdminUsers } from './pages/admin/Users';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ScrollToTop } from './components/ScrollToTop';
+import { NetflixExtensionDiagnostics } from './components/NetflixExtensionDiagnostics';
 
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAdmin, loading } = useAuth();
@@ -68,6 +69,7 @@ export default function App() {
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          <NetflixExtensionDiagnostics />
         </Router>
       </AuthProvider>
     </ErrorBoundary>

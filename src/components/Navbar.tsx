@@ -5,7 +5,6 @@ import {
   Users, 
   Sparkles, 
   LogIn, 
-  User, 
   LogOut, 
   Coffee, 
   Menu, 
@@ -35,8 +34,8 @@ export const Navbar = () => {
           <div className="flex items-center justify-between h-16">
             {/* Brand Logo & Main Nav */}
             <div className="flex items-center gap-6 lg:gap-8">
-              <Link to="/" className="flex items-center gap-2 shrink-0">
-                <span className="text-xl lg:text-2xl font-black bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-500 bg-clip-text text-transparent">
+              <Link to="/" className="flex items-center gap-2.5 shrink-0">
+                <span className="text-2xl sm:text-3xl lg:text-3xl font-black tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-500 bg-clip-text text-transparent">
                   Synora
                 </span>
                 <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
@@ -152,15 +151,9 @@ export const Navbar = () => {
                 <div className="flex items-center gap-2">
                   <Link 
                     to="/login"
-                    className="text-gray-400 hover:text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
-                  >
-                    Login
-                  </Link>
-                  <Link 
-                    to="/login"
                     className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-900/20"
                   >
-                    <User size={14} /> Sign Up
+                    <LogIn size={14} /> Login
                   </Link>
                 </div>
               )}
@@ -266,20 +259,13 @@ export const Navbar = () => {
                     <LogOut size={18} /> Logout
                   </button>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                  <div className="pt-2 border-t border-white/5">
                     <Link
                       to="/login"
                       onClick={() => setIsMenuOpen(false)}
-                      className="flex items-center justify-center p-3 rounded-xl text-sm font-bold text-gray-400 hover:bg-white/5 transition-all"
+                      className="w-full flex items-center justify-center gap-2 p-3 rounded-xl text-sm font-bold bg-emerald-600 text-white shadow-lg transition-all"
                     >
-                      Login
-                    </Link>
-                    <Link
-                      to="/login"
-                      onClick={() => setIsMenuOpen(false)}
-                      className="flex items-center justify-center p-3 rounded-xl text-sm font-bold bg-emerald-600 text-white shadow-lg transition-all"
-                    >
-                      Sign Up
+                      <LogIn size={16} /> Login
                     </Link>
                   </div>
                 )}

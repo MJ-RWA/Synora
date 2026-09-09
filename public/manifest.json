@@ -9,6 +9,23 @@
   "orientation": "any",
   "theme_color": "#050505",
   "background_color": "#050505",
+  "categories": ["entertainment", "social", "video"],
+  "shortcuts": [
+    {
+      "name": "Browse Rooms",
+      "short_name": "Browse",
+      "description": "Discover live public watch parties",
+      "url": "/browse",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Create Room",
+      "short_name": "Create",
+      "description": "Start a new watch party room",
+      "url": "/watchparty/new",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+    }
+  ],
   "icons": [
     {
       "src": "/pwa-192x192.png",

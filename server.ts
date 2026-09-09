@@ -1,9 +1,13 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import fs from "fs";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+
+// Ensure global __dirname does not interfere with third-party ESM modules
+if (typeof (globalThis as Record<string, unknown>).__dirname !== "undefined") {
+  delete (globalThis as Record<string, unknown>).__dirname;
+}
 
 async function startServer() {
   const app = express();
@@ -88,20 +92,6 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-
-    // SPA fallback in development mode for deep URLs (e.g. /watchparty/:roomId)
-    app.use("*", async (req, res, next) => {
-      const url = req.originalUrl;
-      try {
-        const indexPath = path.resolve(process.cwd(), "index.html");
-        let template = fs.readFileSync(indexPath, "utf-8");
-        template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ "Content-Type": "text/html" }).end(template);
-      } catch (e) {
-        vite.ssrFixStacktrace(e as Error);
-        next(e);
-      }
-    });
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));

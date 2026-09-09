@@ -11,6 +11,15 @@ export interface RoomConnectionInfo {
   connectedAt?: number;
 }
 
+export interface NetflixStatusInfo {
+  tabFound: boolean;
+  tabUrl?: string;
+  isWatchPage: boolean;
+  playerAvailable: boolean;
+  state: PlaybackState | null;
+  content: ContentIdentity | null;
+}
+
 export interface ExtensionStatus {
   version: string;
   currentSite: SiteType;
@@ -20,6 +29,7 @@ export interface ExtensionStatus {
   connectionState: ConnectionState;
   roomInfo: RoomConnectionInfo | null;
   lastError: string | null;
+  netflix?: NetflixStatusInfo;
 }
 
 /**
@@ -36,7 +46,10 @@ export type ExtensionMessage =
   | { type: 'DISCONNECT_ROOM' }
   | { type: 'ROOM_STATE_UPDATED'; roomInfo: RoomConnectionInfo | null }
   | { type: 'CONTENT_IDENTIFIED'; content: ContentIdentity }
-  | { type: 'PLAYBACK_STATE_CHANGED'; state: PlaybackState };
+  | { type: 'PLAYBACK_STATE_CHANGED'; state: PlaybackState; content?: ContentIdentity | null }
+  | { type: 'GET_PLAYBACK_STATE' }
+  | { type: 'PLAYBACK_STATE_RESPONSE'; state: PlaybackState | null; content: ContentIdentity | null }
+  | { type: 'CONTROL_PLAYBACK'; action: 'play' | 'pause' | 'seek'; time?: number };
 
 /**
  * Message protocol for communication between Watch Party Web App (PWA)
@@ -82,8 +95,36 @@ export interface SynoraPwaRoomLeave {
   };
 }
 
+export interface SynoraPlaybackStateMessage {
+  source: typeof SYNORA_EXTENSION_MESSAGE_SOURCE;
+  type: 'SYNORA_PLAYBACK_STATE';
+  payload: {
+    site: 'netflix' | string;
+    isAvailable: boolean;
+    state: PlaybackState | null;
+    content: ContentIdentity | null;
+  };
+}
+
+export interface SynoraPlaybackControlMessage {
+  source: typeof SYNORA_PWA_MESSAGE_SOURCE;
+  type: 'SYNORA_PLAYBACK_CONTROL';
+  payload: {
+    action: 'play' | 'pause' | 'seek';
+    time?: number;
+  };
+}
+
+export interface SynoraGetPlaybackStateMessage {
+  source: typeof SYNORA_PWA_MESSAGE_SOURCE;
+  type: 'SYNORA_GET_PLAYBACK_STATE';
+}
+
 export type SynoraBridgeMessage =
   | SynoraPwaHandshakeRequest
   | SynoraExtensionHandshakeResponse
   | SynoraPwaRoomJoin
-  | SynoraPwaRoomLeave;
+  | SynoraPwaRoomLeave
+  | SynoraPlaybackStateMessage
+  | SynoraPlaybackControlMessage
+  | SynoraGetPlaybackStateMessage;

@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, updateDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, increment, setDoc, deleteDoc } from 'firebase/firestore';
+import { useParams, useSearchParams, Link, useNavigate, useLocation } from 'react-router-dom';
+import { doc, onSnapshot, updateDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, increment, setDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
-import { WatchRoom, WatchRoomMessage, WatchRoomUser, WatchRoomReaction, Movie, Episode, Series } from '../types';
+import { WatchRoom, WatchRoomMessage, WatchRoomUser, WatchRoomReaction, NetflixRoomPlayback } from '../types';
 import { useAuth } from '../hooks/useAuth';
+import { useExtensionBridge } from '../hooks/useExtensionBridge';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
 import Hls from 'hls.js';
-import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle } from 'lucide-react';
+import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
 import { YouTubeSyncPlayer } from '../components/YouTubeSyncPlayer';
+import { NetflixSyncCompanion } from '../components/NetflixSyncCompanion';
 
 // Helper to extract YouTube video ID if URL is YouTube
 const getYouTubeVideoId = (url?: string): string | null => {
@@ -22,9 +24,14 @@ const getYouTubeVideoId = (url?: string): string | null => {
 export const WatchParty = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, userData, loading: authLoading } = useAuth();
   const cleanRoomId = roomId ? decodeURIComponent(roomId).trim() : '';
+
+  const navState = location.state as { initialRoom?: WatchRoom; isHostCreation?: boolean } | null;
+  const initialRoomFromState = navState?.initialRoom && navState.initialRoom.id === cleanRoomId ? navState.initialRoom : null;
+  const isHostCreation = Boolean(navState?.isHostCreation);
 
   // Persistent Guest ID in session storage if user is not signed in
   const [guestId] = useState<string>(() => {
@@ -37,18 +44,15 @@ export const WatchParty = () => {
 
   const effectiveUserId = user?.uid || guestId;
 
-  const [room, setRoom] = useState<WatchRoom | null>(null);
-  const [roomLoading, setRoomLoading] = useState(true);
+  const [room, setRoom] = useState<WatchRoom | null>(() => initialRoomFromState);
+  const [roomLoading, setRoomLoading] = useState(() => !initialRoomFromState);
   const [roomNotFound, setRoomNotFound] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
 
-  const isHost = Boolean(user?.uid && room?.hostId && user.uid === room.hostId);
-  const [movie, setMovie] = useState<Movie | null>(null);
-  const [series, setSeries] = useState<Series | null>(null);
-  const [episode, setEpisode] = useState<Episode | null>(null);
+  const isHost = Boolean(user?.uid && room && (user.uid === room.hostId || user.uid === room.ownerId));
   const [copied, setCopied] = useState(false);
   const [username, setUsername] = useState(searchParams.get('username') || user?.displayName || userData?.username || '');
-  const [hasJoined, setHasJoined] = useState(false);
+  const [hasJoined, setHasJoined] = useState(() => Boolean(isHostCreation || searchParams.get('username')));
   const [isJoining, setIsJoining] = useState(false);
   const [muted, setMuted] = useState(false);
   const [messages, setMessages] = useState<WatchRoomMessage[]>([]);
@@ -62,6 +66,7 @@ export const WatchParty = () => {
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isChangeMovieModalOpen, setIsChangeMovieModalOpen] = useState(false);
   const [isLeaveConfirmationOpen, setIsLeaveConfirmationOpen] = useState(false);
+  const [isLeavingRoom, setIsLeavingRoom] = useState(false);
   const isRoomEnded = Boolean(room && room.isActive === false);
   const [friends, setFriends] = useState<User[]>([]);
   const [availableMovies, setAvailableMovies] = useState<Movie[]>([]);
@@ -108,6 +113,45 @@ export const WatchParty = () => {
   const ytSyncFnRef = useRef<(() => void) | null>(null);
   const lastPublishedPlayback = useRef<{ playing: boolean; time: number; timestamp: number }>({ playing: false, time: 0, timestamp: 0 });
 
+  // Chrome Extension Bridge & Netflix Synchronization Engine (Phase 4 & 5)
+  const extensionBridge = useExtensionBridge();
+  const extensionBridgeRef = useRef(extensionBridge);
+  useEffect(() => {
+    extensionBridgeRef.current = extensionBridge;
+  }, [extensionBridge]);
+  const [autoSyncNetflix, setAutoSyncNetflix] = useState(true);
+  const handleToggleAutoSync = useCallback(() => {
+    setAutoSyncNetflix(prev => !prev);
+  }, []);
+  const handleYtSyncReady = useCallback((syncFn: () => void) => {
+    ytSyncFnRef.current = syncFn;
+  }, []);
+  const [netflixSyncDrift, setNetflixSyncDrift] = useState<number | null>(null);
+  const [isNetflixSynced, setIsNetflixSynced] = useState(true);
+  const isApplyingRemoteNetflixPlaybackRef = useRef(false);
+  const lastHostPublishedNetflix = useRef<{ status: string; position: number; contentId: string; updatedAt: number }>({
+    status: '',
+    position: -1,
+    contentId: '',
+    updatedAt: 0,
+  });
+
+  const isNetflixParty = Boolean(
+    room?.sourceType === 'netflix' ||
+    room?.videoUrl?.includes('netflix.com') ||
+    room?.netflixPlayback
+  );
+
+  const remoteContentId = room?.netflixPlayback?.contentId || (room?.videoUrl ? (room.videoUrl.match(/watch\/(\d+)/)?.[1] || '') : '');
+  const localContentId = extensionBridge.netflixState.content?.id || '';
+  const isContentMismatch = Boolean(
+    isNetflixParty &&
+    !isHost &&
+    remoteContentId &&
+    localContentId &&
+    remoteContentId !== localContentId
+  );
+
   const prevVideoUrlRef = useRef<string | null>(null);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
@@ -121,7 +165,7 @@ export const WatchParty = () => {
   useEffect(() => { roomRef.current = room; }, [room]);
   const isHostRef = useRef(isHost);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
-  const autoJoinAttemptedRef = useRef(false);
+  const handleJoinRef = useRef<(name?: string) => Promise<void>>(() => Promise.resolve());
 
   function showToast(message: string) {
     const id = Date.now();
@@ -149,35 +193,51 @@ export const WatchParty = () => {
     }
   }, [hasJoined]);
 
+  const joinAttemptedRef = useRef(false);
+
   // Join Room Handler
   const handleJoin = useCallback(async (customName?: string) => {
-    const finalName = (customName || usernameRef.current || userRef.current?.displayName || 'Guest').trim();
-    if (!finalName || !cleanRoomId) return;
+    const finalName = (customName || username || usernameRef.current || userRef.current?.displayName || userDataRef.current?.username || 'Guest').trim();
+    if (!cleanRoomId) return;
     setIsJoining(true);
     try {
       const currentUser = userRef.current;
-      const isHostUser = Boolean(currentUser?.uid && roomRef.current?.hostId && currentUser.uid === roomRef.current.hostId);
+      const currentUid = currentUser?.uid || effectiveUserId;
+      const isHostUser = Boolean(currentUser?.uid && roomRef.current && (currentUser.uid === roomRef.current.hostId || currentUser.uid === roomRef.current.ownerId));
 
-      const userDocRef = doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId);
+      // If room was marked inactive and this user is host/owner, reactivate it automatically
+      if (isHostUser && roomRef.current && roomRef.current.isActive === false) {
+        updateDoc(doc(db, 'watchRooms', cleanRoomId), { isActive: true }).catch(() => {});
+        setRoom(prev => prev ? { ...prev, isActive: true } : null);
+      }
+
+      const userDocRef = doc(db, `watchRooms/${cleanRoomId}/users`, currentUid);
 
       await setDoc(userDocRef, {
         username: finalName,
-        uid: currentUser?.uid || effectiveUserId,
+        uid: currentUid,
         isHost: isHostUser,
         joinedAt: new Date().toISOString(),
         speaking: false
-      }, { merge: true });
+      }, { merge: true }).catch((err) => {
+        console.warn("User doc non-fatal sync error:", err);
+      });
 
-      try {
-        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
-          usersCount: increment(1)
-        });
-      } catch (countErr) {
-        console.warn("Users count update non-fatal error:", countErr);
+      if (!isHostUser) {
+        try {
+          await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+            usersCount: increment(1)
+          });
+        } catch (countErr) {
+          console.warn("Users count update non-fatal error:", countErr);
+        }
       }
 
       setUsername(finalName);
+      hasJoinedRef.current = true;
+      joinAttemptedRef.current = true;
       setHasJoined(true);
+
       if (!currentUser) {
         sessionStorage.setItem('synora_guest_name', finalName);
         if (!searchParams.get('username')) {
@@ -186,38 +246,50 @@ export const WatchParty = () => {
       }
     } catch (error) {
       console.error("Join room error:", error);
-      showToast("Failed to join room. Please try again.");
+      // Ensure user can still enter locally without being blocked by network/firestore issues
+      setUsername(finalName);
+      hasJoinedRef.current = true;
+      joinAttemptedRef.current = true;
+      setHasJoined(true);
     } finally {
       setIsJoining(false);
     }
-  }, [cleanRoomId, effectiveUserId, searchParams, setSearchParams]);
+  }, [cleanRoomId, effectiveUserId, username, searchParams, setSearchParams]);
 
-  // Auto-join any user or device visiting the room link so playback begins immediately
   useEffect(() => {
-    if (!room || !cleanRoomId || hasJoined || autoJoinAttemptedRef.current || roomLoading || authLoading) return;
-    if (room.isActive === false) return;
+    handleJoinRef.current = handleJoin;
+  }, [handleJoin]);
 
-    autoJoinAttemptedRef.current = true;
+  // Check and redeem invite code for authenticated user
+  const inviteCodeParam = searchParams.get('invite')?.trim();
+  const queryUsername = searchParams.get('username')?.trim();
+  const inviteRedeemedRef = useRef(false);
+  const [inviteRedeemTrigger, setInviteRedeemTrigger] = useState(0);
 
-    const currentUser = userRef.current;
-    let initialName: string;
+  useEffect(() => {
+    if (!cleanRoomId || authLoading || !user || !inviteCodeParam || inviteRedeemedRef.current) return;
 
-    if (currentUser) {
-      initialName = currentUser.displayName || userDataRef.current?.username || currentUser.email?.split('@')[0] || 'Member';
-    } else {
-      const urlName = searchParams.get('username');
-      const savedGuestName = sessionStorage.getItem('synora_guest_name') || sessionStorage.getItem('streamarena_guest_name');
-      if (urlName) {
-        initialName = urlName;
-      } else if (savedGuestName) {
-        initialName = savedGuestName;
-      } else {
-        initialName = `Guest ${Math.floor(100 + Math.random() * 900)}`;
-      }
+    // If user is host or already in allowedUsers, no need to redeem
+    if (room && (room.hostId === user.uid || room.ownerId === user.uid || (Array.isArray(room.allowedUsers) && room.allowedUsers.includes(user.uid)))) {
+      return;
     }
 
-    handleJoin(initialName);
-  }, [room, cleanRoomId, hasJoined, roomLoading, authLoading, searchParams, handleJoin]);
+    const redeemInvite = async () => {
+      inviteRedeemedRef.current = true;
+      try {
+        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+          allowedUsers: arrayUnion(user.uid),
+          _inviteAttempt: inviteCodeParam
+        });
+        setPermissionDenied(false);
+        setInviteRedeemTrigger(prev => prev + 1);
+      } catch (err) {
+        console.warn('Auto-redeem invite code failed:', err);
+      }
+    };
+
+    redeemInvite();
+  }, [cleanRoomId, user, authLoading, inviteCodeParam, room]);
 
   // Subscribe to Room Document and Subcollections
   useEffect(() => {
@@ -227,31 +299,87 @@ export const WatchParty = () => {
       return;
     }
 
-    setRoomLoading(true);
+    // Wait until auth state is fully resolved so temporary auth-loading state is not treated as permission denied
+    if (authLoading) {
+      if (!roomRef.current && !initialRoomFromState) {
+        setRoomLoading(true);
+      }
+      return;
+    }
+
+    if (!roomRef.current && !initialRoomFromState) {
+      setRoomLoading(true);
+    }
     setRoomNotFound(false);
     setPermissionDenied(false);
 
+    let isSubscribed = true;
+
     const unsubscribeRoom = onSnapshot(doc(db, 'watchRooms', cleanRoomId), (snapshot) => {
+      if (!isSubscribed) return;
       if (snapshot.exists()) {
         const roomData = { id: snapshot.id, ...snapshot.data() } as WatchRoom;
         setRoom(roomData);
         setRoomNotFound(false);
         setPermissionDenied(false);
+
+        // Ensure room is cached in local storage so user never loses access across reloads
+        try {
+          const idListKey = 'synora_saved_room_ids';
+          const existing: string[] = JSON.parse(localStorage.getItem(idListKey) || '[]');
+          if (!existing.includes(snapshot.id)) {
+            localStorage.setItem(idListKey, JSON.stringify([snapshot.id, ...existing].slice(0, 50)));
+          }
+        } catch {
+          // Ignore local storage quota errors
+        }
         
-        // Auto-join if host
+        // Auto-join if user has an established identity, host, or pre-filled username to skip username prompt
         const currentUser = userRef.current;
-        if (currentUser && roomData.hostId === currentUser.uid) {
-          setHasJoined(true);
-          setUsername(prev => prev || currentUser.displayName || 'Host');
+        const isUserHost = Boolean(currentUser?.uid && (roomData.hostId === currentUser.uid || roomData.ownerId === currentUser.uid));
+        
+        // If the host is returning to their room and it was marked inactive, reactivate it
+        if (isUserHost && roomData.isActive === false) {
+          updateDoc(doc(db, 'watchRooms', cleanRoomId), { isActive: true }).catch(() => {});
+        }
+
+        const candidateName = (
+          currentUser?.displayName || 
+          userDataRef.current?.username || 
+          (currentUser?.email ? currentUser.email.split('@')[0] : '') || 
+          (isUserHost ? 'Host' : '')
+        )?.trim();
+
+        if (candidateName && !hasJoinedRef.current && !joinAttemptedRef.current) {
+          joinAttemptedRef.current = true;
+          setUsername(candidateName);
+          handleJoinRef.current(candidateName);
         }
       } else {
         setRoom(null);
         setRoomNotFound(true);
       }
       setRoomLoading(false);
-    }, (error) => {
+    }, async (error) => {
+      if (!isSubscribed) return;
       console.error(`Error loading watch room ${cleanRoomId}:`, error);
       if (error.code === 'permission-denied') {
+        // If user has an invite code and is authenticated, attempt immediate redemption if not already attempted
+        const currentUser = userRef.current;
+        if (currentUser?.uid && inviteCodeParam && !inviteRedeemedRef.current) {
+          try {
+            await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+              allowedUsers: arrayUnion(currentUser.uid),
+              _inviteAttempt: inviteCodeParam
+            });
+            inviteRedeemedRef.current = true;
+            setPermissionDenied(false);
+            setInviteRedeemTrigger(prev => prev + 1);
+            return;
+          } catch (redeemErr) {
+            console.warn("Permission-denied invite redemption failed:", redeemErr);
+          }
+        }
         setPermissionDenied(true);
       } else {
         setRoomNotFound(true);
@@ -299,7 +427,7 @@ export const WatchParty = () => {
           setUsername(prev => prev || me.username);
         }
       } else if (!currentUser && !hasJoinedRef.current) {
-        const me = users.find(u => u.uid === effectiveUserId || u.username === searchParams.get('username'));
+        const me = users.find(u => u.uid === effectiveUserId || (queryUsername && u.username === queryUsername));
         if (me) {
           setHasJoined(true);
           setUsername(prev => prev || me.username);
@@ -334,66 +462,26 @@ export const WatchParty = () => {
     });
 
     return () => {
+      isSubscribed = false;
       unsubscribeRoom();
       unsubscribeMessages();
       unsubscribeUsers();
       unsubscribeReactions();
       unsubscribeTyping();
     };
-  }, [cleanRoomId, effectiveUserId, searchParams]);
+  }, [cleanRoomId, user?.uid, authLoading, effectiveUserId, inviteRedeemTrigger, inviteCodeParam, queryUsername, initialRoomFromState]);
 
-  // Auto-join if user is logged in or has nickname in URL
+  // Pre-fill default nickname from user profile or URL parameter without skipping the username prompt
   useEffect(() => {
-    const autoJoin = async () => {
-      if (
-        !hasJoined && 
-        !isJoining && 
-        cleanRoomId && 
-        room && 
-        room.isActive && 
-        !roomLoading && 
-        !authLoading && 
-        !autoJoinAttemptedRef.current
-      ) {
-        // If user is host:
-        if (user && room.hostId === user.uid) {
-          autoJoinAttemptedRef.current = true;
-          setHasJoined(true);
-          return;
-        }
-
-        // Check if user is already registered in liveUsers
-        if (user && liveUsers.some(u => u.uid === user.uid)) {
-          autoJoinAttemptedRef.current = true;
-          setHasJoined(true);
-          return;
-        }
-
-        // If user has a name from URL or profile, auto-join
-        const queryName = searchParams.get('username')?.trim();
-        const profileName = user?.displayName?.trim() || userData?.username?.trim() || (user?.email ? user.email.split('@')[0] : '');
-        const effectiveName = queryName || profileName;
-
-        if (effectiveName) {
-          autoJoinAttemptedRef.current = true;
-          setHasJoined(true);
-          setUsername(effectiveName);
-          await handleJoin(effectiveName);
-        }
+    if (!hasJoined && !username) {
+      const queryName = searchParams.get('username')?.trim();
+      const profileName = user?.displayName?.trim() || userData?.username?.trim() || (user?.email ? user.email.split('@')[0] : '');
+      const defaultName = queryName || profileName;
+      if (defaultName) {
+        setUsername(defaultName);
       }
-    };
-
-    autoJoin();
-  }, [user, userData, hasJoined, isJoining, cleanRoomId, room, roomLoading, authLoading, searchParams, liveUsers, handleJoin]);
-
-  const usernameSetFromProfile = useRef(false);
-
-  useEffect(() => {
-    if (user?.displayName && !username && !hasJoined && !usernameSetFromProfile.current) {
-      setUsername(user.displayName);
-      usernameSetFromProfile.current = true;
     }
-  }, [user?.displayName, hasJoined, username]);
+  }, [user, userData, hasJoined, username, searchParams]);
 
   // Handle video URL change
   useEffect(() => {
@@ -405,27 +493,6 @@ export const WatchParty = () => {
     }
     prevVideoUrlRef.current = room?.videoUrl || null;
   }, [room?.videoUrl]);
-
-  // Fetch metadata
-  useEffect(() => {
-    const fetchMetadata = async () => {
-      if (!room) return;
-      if (room.movieId && (!movie || movie.id !== room.movieId)) {
-        const movieDoc = await getDoc(doc(db, 'movies', room.movieId));
-        if (movieDoc.exists()) setMovie({ id: movieDoc.id, ...movieDoc.data() } as Movie);
-      } else if (room.seriesId && room.episodeId && (!episode || episode.id !== room.episodeId)) {
-        const episodeDoc = await getDoc(doc(db, `series/${room.seriesId}/episodes`, room.episodeId));
-        if (episodeDoc.exists()) setEpisode({ id: episodeDoc.id, ...episodeDoc.data() } as Episode);
-        const seriesDoc = await getDoc(doc(db, 'series', room.seriesId));
-        if (seriesDoc.exists()) setSeries({ id: seriesDoc.id, ...seriesDoc.data() });
-      } else if (room.seriesId && !room.episodeId && (!series || series.id !== room.seriesId)) {
-        const seriesDoc = await getDoc(doc(db, 'series', room.seriesId));
-        if (seriesDoc.exists()) setSeries({ id: seriesDoc.id, ...seriesDoc.data() });
-      }
-    };
-
-    fetchMetadata();
-  }, [room, movie, episode, series]);
 
   // Authoritative Playback Updater for Host
   const updateRoomPlayback = useCallback(async (playing: boolean, time: number) => {
@@ -611,7 +678,7 @@ export const WatchParty = () => {
   // Participant HTML5 Video Sync Effect
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || isHost || isScreenSharing || youtubeVideoId) return;
+    if (!video || isHost || isScreenSharing || youtubeVideoId || isNetflixParty) return;
 
     // Avoid syncing while another sync action is in-flight
     if (isRemoteSyncRef.current) return;
@@ -675,12 +742,12 @@ export const WatchParty = () => {
         isRemoteSyncRef.current = false;
       }, 1200);
     }
-  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isScreenSharing, youtubeVideoId]);
+  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isScreenSharing, youtubeVideoId, isNetflixParty]);
 
   // Host auto-start playback if room is marked playing
   useEffect(() => {
     const video = videoRef.current;
-    if (!isHost || !video || !room?.playing || isScreenSharing || youtubeVideoId) return;
+    if (!isHost || !video || !room?.playing || isScreenSharing || youtubeVideoId || isNetflixParty) return;
     if (!video.src && !video.currentSrc) return;
     if (video.paused) {
       const p = video.play();
@@ -699,11 +766,11 @@ export const WatchParty = () => {
         });
       }
     }
-  }, [isHost, room?.playing, isScreenSharing, youtubeVideoId]);
+  }, [isHost, room?.playing, isScreenSharing, youtubeVideoId, isNetflixParty]);
 
   // Host Periodic Heartbeat Sync (every 4s while playing)
   useEffect(() => {
-    if (!isHost || !cleanRoomId || isScreenSharing || youtubeVideoId) return;
+    if (!isHost || !cleanRoomId || isScreenSharing || youtubeVideoId || isNetflixParty) return;
 
     const interval = setInterval(() => {
       const video = videoRef.current;
@@ -713,7 +780,205 @@ export const WatchParty = () => {
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [isHost, cleanRoomId, isScreenSharing, youtubeVideoId, updateRoomPlayback]);
+  }, [isHost, cleanRoomId, isScreenSharing, youtubeVideoId, isNetflixParty, updateRoomPlayback]);
+
+  // ---------------------------------------------------------------------------
+  // PHASE 5: NETFLIX EXTENSION PLAYBACK SYNCHRONIZATION ENGINE
+  // ---------------------------------------------------------------------------
+
+  // 1. Connect room info with Extension
+  useEffect(() => {
+    if (!cleanRoomId || !room?.title) return;
+    extensionBridgeRef.current.joinRoomWithExtension(cleanRoomId, room.title, isHost);
+    return () => {
+      extensionBridgeRef.current.leaveRoomWithExtension(cleanRoomId);
+    };
+  }, [cleanRoomId, room?.title, isHost]);
+
+  // 2. Host Authoritative Netflix Playback Publisher
+  // Detects play, pause, seek, and content change from the host's Netflix extension tab
+  // and writes authoritative state to Firestore (NEVER on every frame).
+  useEffect(() => {
+    if (!isNetflixParty || !isHost || !cleanRoomId) return;
+    if (isApplyingRemoteNetflixPlaybackRef.current) return;
+
+    const netflixState = extensionBridge.netflixState;
+    if (!netflixState.isAvailable || !netflixState.state) return;
+
+    const localState = netflixState.state;
+    const localContent = netflixState.content;
+    const now = Date.now();
+
+    const currentStatus = localState.isPlaying ? 'playing' : 'paused';
+    const currentPosition = localState.currentTime;
+    const currentContentId = localContent?.id || room?.netflixPlayback?.contentId || 'netflix';
+
+    const last = lastHostPublishedNetflix.current;
+
+    // Calculate expected position based on last publish to identify meaningful seek events
+    const elapsedSec = (now - last.updatedAt) / 1000;
+    const expectedPos = last.status === 'playing' ? last.position + elapsedSec : last.position;
+    const seekDrift = Math.abs(currentPosition - expectedPos);
+
+    const hasStatusChanged = last.status !== currentStatus;
+    const hasContentChanged = last.contentId !== currentContentId;
+    const hasSeeked = last.position >= 0 && seekDrift > 2.5;
+
+    // Only publish when a meaningful event occurred (or initial publish)
+    if (hasStatusChanged || hasContentChanged || hasSeeked || last.position < 0) {
+      lastHostPublishedNetflix.current = {
+        status: currentStatus,
+        position: currentPosition,
+        contentId: currentContentId,
+        updatedAt: now,
+      };
+
+      const updatedNetflixPlayback: NetflixRoomPlayback = {
+        status: currentStatus,
+        position: currentPosition,
+        updatedAt: now,
+        contentId: currentContentId,
+        contentTitle: localContent?.title || room?.netflixPlayback?.contentTitle || room?.title || 'Netflix Title',
+        rawUrl: localContent?.rawUrl || room?.videoUrl || `https://www.netflix.com/watch/${currentContentId}`,
+        season: localContent?.season ?? null,
+        episode: localContent?.episode ?? null,
+        hostId: user?.uid || 'host',
+        hostName: username || 'Host',
+      };
+
+      updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+        playing: localState.isPlaying,
+        currentTime: currentPosition,
+        updatedAt: now,
+        netflixPlayback: updatedNetflixPlayback,
+      }).catch((err) => {
+        console.warn('Failed to publish host authoritative Netflix playback:', err);
+      });
+    }
+  }, [
+    isNetflixParty,
+    isHost,
+    cleanRoomId,
+    user?.uid,
+    username,
+    room?.title,
+    room?.videoUrl,
+    room?.netflixPlayback?.contentId,
+    room?.netflixPlayback?.contentTitle,
+    extensionBridge.netflixState,
+  ]);
+
+  // 3. Participant Lockstep Synchronizer
+  // Listens to authoritative Firestore room playback state and synchronizes local Netflix tab.
+  // Suppresses feedback loops via isApplyingRemoteNetflixPlaybackRef.
+  const applyParticipantNetflixSyncRef = useRef<(force?: boolean) => void>(() => {});
+
+  const applyParticipantNetflixSync = useCallback(
+    (force = false) => {
+      if (isHost || !isNetflixParty || !room?.netflixPlayback) return;
+      if (!autoSyncNetflix && !force) return;
+
+      const netflixState = extensionBridgeRef.current.netflixState;
+      if (!netflixState.isAvailable || !netflixState.state) return;
+
+      const remotePlayback = room.netflixPlayback;
+      const localContent = netflixState.content;
+
+      // Content Identity Guard: Compare content identity before applying playback commands
+      if (
+        remotePlayback.contentId &&
+        localContent?.id &&
+        remotePlayback.contentId !== localContent.id
+      ) {
+        setIsNetflixSynced((prev) => (prev ? false : prev));
+        return;
+      }
+
+      // Feedback Loop Guard: Avoid re-processing if command was just dispatched
+      if (isApplyingRemoteNetflixPlaybackRef.current && !force) return;
+
+      const now = Date.now();
+      const elapsed = (now - remotePlayback.updatedAt) / 1000;
+      const expectedPosition = remotePlayback.status === 'playing'
+        ? Math.max(0, remotePlayback.position + elapsed)
+        : remotePlayback.position;
+
+      const localState = netflixState.state;
+      const drift = localState.currentTime - expectedPosition;
+      const absDrift = Math.abs(drift);
+
+      // Only update drift state if change exceeds 0.5s to avoid rendering storms
+      setNetflixSyncDrift((prev) => (prev === null || Math.abs(prev - drift) > 0.5 ? drift : prev));
+
+      // Evaluate required actions:
+      const shouldSeek = absDrift > 2.0; // Configured drift threshold > 2.0s
+      const shouldPlay = remotePlayback.status === 'playing' && !localState.isPlaying;
+      const shouldPause = remotePlayback.status === 'paused' && localState.isPlaying;
+
+      if (!shouldSeek && !shouldPlay && !shouldPause) {
+        setIsNetflixSynced((prev) => (!prev ? true : prev));
+        if (force) {
+          showToast(`Already synchronized with host (drift: ${absDrift.toFixed(1)}s)`);
+        }
+        return;
+      }
+
+      // Arm loop prevention guard
+      isApplyingRemoteNetflixPlaybackRef.current = true;
+      setTimeout(() => {
+        isApplyingRemoteNetflixPlaybackRef.current = false;
+      }, 2500);
+
+      // Execute Seek
+      if (shouldSeek) {
+        extensionBridgeRef.current.sendPlaybackControl('seek', expectedPosition);
+      }
+
+      // Execute Play / Pause
+      if (shouldPlay) {
+        extensionBridgeRef.current.sendPlaybackControl('play');
+      } else if (shouldPause) {
+        extensionBridgeRef.current.sendPlaybackControl('pause');
+      }
+
+      setIsNetflixSynced((prev) => (!prev ? true : prev));
+      if (force) {
+        showToast(`Synchronized with host at ${formatTime(expectedPosition)}`);
+      }
+    },
+    [isHost, isNetflixParty, room?.netflixPlayback, autoSyncNetflix]
+  );
+
+  useEffect(() => {
+    applyParticipantNetflixSyncRef.current = applyParticipantNetflixSync;
+  }, [applyParticipantNetflixSync]);
+
+  // Trigger sync on authoritative Firestore updates
+  useEffect(() => {
+    if (isHost || !isNetflixParty || !room?.netflixPlayback) return;
+    applyParticipantNetflixSyncRef.current(false);
+  }, [
+    isHost,
+    isNetflixParty,
+    room?.netflixPlayback,
+    room?.netflixPlayback?.status,
+    room?.netflixPlayback?.position,
+    room?.netflixPlayback?.updatedAt,
+    room?.netflixPlayback?.contentId,
+  ]);
+
+  // Periodic drift check (every 4 seconds for participants)
+  useEffect(() => {
+    if (isHost || !isNetflixParty || !autoSyncNetflix) return;
+    const interval = setInterval(() => {
+      applyParticipantNetflixSyncRef.current(false);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isHost, isNetflixParty, autoSyncNetflix]);
+
+  const handleManualNetflixSync = () => {
+    applyParticipantNetflixSync(true);
+  };
 
   // Initial video metadata load handler
   const handleVideoLoadedMetadata = useCallback(() => {
@@ -788,30 +1053,42 @@ export const WatchParty = () => {
     if (isChangeMovieModalOpen) fetchContent();
   }, [user, isInviteModalOpen, isChangeMovieModalOpen]);
 
-  const handleScreenStream = async (stream: MediaStream | null) => {
-    setScreenStream(stream);
-    if (!cleanRoomId || !user || room?.hostId !== user.uid) return;
+  const handleScreenStream = useCallback(async (stream: MediaStream | null) => {
+    setScreenStream(prev => prev === stream ? prev : stream);
+    if (!cleanRoomId) return;
 
     try {
-      await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
-        isScreenSharing: !!stream,
-        screenHostId: stream ? user.uid : null
-      });
+      const currentUser = userRef.current;
+      const currentRoom = roomRef.current;
+      const isHostUser = Boolean(currentUser?.uid && currentRoom && (currentUser.uid === currentRoom.hostId || currentUser.uid === currentRoom.ownerId));
+
+      if (isHostUser) {
+        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+          isScreenSharing: Boolean(stream),
+          screenHostId: stream ? currentUser!.uid : null
+        });
+      }
     } catch (error) {
-      console.error('Error updating screen share state:', error);
+      console.warn('Notice updating screen share state:', error);
     }
-  };
+  }, [cleanRoomId]);
 
   const inviteFriend = async (friend: User) => {
-    if (!roomId || !user) return;
+    if (!cleanRoomId || !user) return;
     try {
+      // Add friend UID to allowedUsers so Firestore rules grant access to this private room
+      await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+        allowedUsers: arrayUnion(friend.uid)
+      }).catch(err => console.warn('Could not update allowedUsers for invited friend:', err));
+
       await addDoc(collection(db, 'notifications'), {
         toUser: friend.uid,
         fromUser: user.uid,
         fromUsername: user.displayName || 'Someone',
         type: 'invite',
         message: `${user.displayName || 'A friend'} invited you to watch ${room?.title}`,
-        roomId,
+        roomId: cleanRoomId,
+        inviteCode: room?.inviteCode || '',
         read: false,
         time: new Date().toISOString()
       });
@@ -822,7 +1099,7 @@ export const WatchParty = () => {
   };
 
   const changeVideo = async (item: Movie | Episode | Series) => {
-    if (!roomId || !user || room?.hostId !== user.uid) return;
+    if (!roomId || !user || (room?.hostId !== user.uid && room?.ownerId !== user.uid)) return;
     try {
       let videoUrl = '';
       let episodeId = null;
@@ -1003,9 +1280,18 @@ export const WatchParty = () => {
     }
   };
 
+  const getRoomShareUrl = useCallback(() => {
+    if (!cleanRoomId) return '';
+    const base = `${window.location.origin}/watchparty/${cleanRoomId}`;
+    if (room?.inviteCode) {
+      return `${base}?invite=${encodeURIComponent(room.inviteCode)}`;
+    }
+    return base;
+  }, [cleanRoomId, room?.inviteCode]);
+
   const handleCopyLink = async () => {
     if (!cleanRoomId) return;
-    const shareUrl = `${window.location.origin}/watchparty/${cleanRoomId}`;
+    const shareUrl = getRoomShareUrl();
     if (navigator.share) {
       try {
         await navigator.share({
@@ -1013,7 +1299,7 @@ export const WatchParty = () => {
           text: `Watch ${room?.title || 'videos'} together in real-time on Synora!`,
           url: shareUrl,
         });
-        showToast('Link shared successfully!');
+        showToast('Invite link shared successfully!');
         return;
       } catch (err: unknown) {
         const errorObj = err as { name?: string };
@@ -1033,7 +1319,7 @@ export const WatchParty = () => {
       fallbackCopy(shareUrl);
     }
     setCopied(true);
-    showToast('Room link copied to clipboard!');
+    showToast('Room invite link copied to clipboard!');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -1104,7 +1390,7 @@ export const WatchParty = () => {
     } else {
       try {
         if (effectiveUserId) {
-          await deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId));
+          await deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId)).catch(() => {});
           await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
             usersCount: increment(-1)
           }).catch(() => {});
@@ -1116,26 +1402,50 @@ export const WatchParty = () => {
     }
   };
 
-  const confirmLeaveRoom = async (endParty: boolean) => {
+  const confirmLeaveRoom = async (endAndPermanentlyDelete: boolean = false) => {
     if (!cleanRoomId) return;
+    setIsLeavingRoom(true);
     try {
-      if (isHost && endParty) {
-        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
-          isActive: false
-        });
+      // Immediately stop media and screen share tracks
+      if (screenStream) {
+        screenStream.getTracks().forEach(t => t.stop());
       }
-      
-      if (effectiveUserId) {
-        await deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId)).catch(() => {});
-        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+
+      // Notify extension bridge
+      try {
+        extensionBridgeRef.current.leaveRoomWithExtension(cleanRoomId);
+      } catch (extErr) {
+        console.debug('Extension bridge cleanup non-fatal:', extErr);
+      }
+
+      const currentUid = userRef.current?.uid || effectiveUserId;
+      if (currentUid) {
+        deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, currentUid)).catch(() => {});
+        updateDoc(doc(db, 'watchRooms', cleanRoomId), {
           usersCount: increment(-1)
         }).catch(() => {});
       }
+
+      if (isHost && endAndPermanentlyDelete) {
+        // Explicitly end and remove the room permanently
+        deleteDoc(doc(db, 'watchRooms', cleanRoomId)).catch(async () => {
+          await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+            isActive: false
+          }).catch(() => {});
+        });
+      }
       
+      setIsLeaveConfirmationOpen(false);
       navigate('/');
     } catch (error) {
       console.warn('Error leaving room:', error);
+      setIsLeaveConfirmationOpen(false);
       navigate('/');
+    } finally {
+      setIsLeavingRoom(false);
     }
   };
 
@@ -1159,21 +1469,43 @@ export const WatchParty = () => {
 
   // 2. Permission Denied state
   if (permissionDenied) {
+    const hasInviteParam = Boolean(inviteCodeParam);
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-black text-white p-4 space-y-6">
-        <div className="w-20 h-20 bg-amber-500/20 text-amber-500 rounded-full flex items-center justify-center">
-          <X size={40} />
+        <div className="w-20 h-20 bg-amber-500/20 text-amber-400 rounded-full flex items-center justify-center border border-amber-500/30">
+          <AlertTriangle size={38} />
         </div>
         <div className="text-center space-y-2 max-w-md">
-          <h2 className="text-3xl font-black">Access Restricted</h2>
-          <p className="text-gray-400">You don't have permission to access this watch party. Please sign in or check the invite link.</p>
+          <h2 className="text-2xl sm:text-3xl font-black">
+            {hasInviteParam && !user ? "Sign In to Accept Invitation" : "You don't have access to this room"}
+          </h2>
+          <p className="text-gray-400 text-sm">
+            {hasInviteParam && !user
+              ? "You've been invited to this private watch party! Please sign in to verify your invitation and join."
+              : "This watch party is private. Only the room owner and explicitly invited participants can join."}
+          </p>
         </div>
-        <div className="flex items-center gap-4">
-          <Link to="/" className="px-8 py-4 bg-white/10 hover:bg-white/20 rounded-2xl font-bold transition-all border border-white/10">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-xs">
+          {!user ? (
+            <Link 
+              to={`/login?redirect=${encodeURIComponent(`/watchparty/${cleanRoomId}${inviteCodeParam ? `?invite=${inviteCodeParam}` : ''}`)}`}
+              className="w-full text-center px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-900/20 text-sm"
+            >
+              Sign In to Continue
+            </Link>
+          ) : (
+            <Link 
+              to={`/login?redirect=${encodeURIComponent(`/watchparty/${cleanRoomId}`)}`}
+              className="w-full text-center px-6 py-3.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold transition-all border border-white/10 text-sm"
+            >
+              Switch Account
+            </Link>
+          )}
+          <Link 
+            to="/" 
+            className="w-full text-center px-6 py-3.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-xl font-bold transition-all border border-white/5 text-sm"
+          >
             Back to Home
-          </Link>
-          <Link to={`/login?redirect=/watchparty/${cleanRoomId}`} className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold transition-all shadow-lg shadow-emerald-900/20">
-            Sign In
           </Link>
         </div>
       </div>
@@ -1207,11 +1539,33 @@ export const WatchParty = () => {
         </div>
         <div className="text-center space-y-2 max-w-md">
           <h2 className="text-3xl font-black">Watch Party Ended</h2>
-          <p className="text-gray-400">The host has ended this watch party session.</p>
+          <p className="text-gray-400">
+            {isHost 
+              ? 'You previously ended this session. You can reactivate and reopen this room anytime.' 
+              : 'The host has ended this watch party session.'}
+          </p>
         </div>
-        <Link to="/" className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold transition-all shadow-lg shadow-emerald-900/20">
-          Browse Other Rooms
-        </Link>
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          {isHost && (
+            <button 
+              onClick={async () => {
+                try {
+                  await updateDoc(doc(db, 'watchRooms', cleanRoomId), { isActive: true });
+                  setRoom(prev => prev ? { ...prev, isActive: true } : null);
+                  handleJoin();
+                } catch (err) {
+                  console.error('Reactivate room error:', err);
+                }
+              }}
+              className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold transition-all shadow-lg shadow-emerald-900/20 flex items-center gap-2"
+            >
+              <Play size={18} fill="currentColor" /> Reactivate & Reopen Party
+            </button>
+          )}
+          <Link to="/" className="px-8 py-4 bg-white/10 hover:bg-white/20 text-white rounded-2xl font-bold transition-all">
+            Browse Other Rooms
+          </Link>
+        </div>
       </div>
     );
   }
@@ -1228,19 +1582,27 @@ export const WatchParty = () => {
             <h2 className="text-2xl font-black text-white">Joining Watch Party</h2>
             <p className="text-gray-400 text-sm">Connecting you to <span className="text-white font-bold">{room.title}</span>...</p>
           </div>
-          <div className="space-y-4">
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleJoin(username.trim());
+            }}
+            className="space-y-4"
+          >
             <div className="relative">
               <User className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
               <input 
                 type="text" 
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Your nickname..."
+                placeholder="Choose your display name..."
+                autoFocus
                 className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all"
               />
             </div>
             <button 
-              onClick={() => handleJoin()}
+              id="enter-room-now-btn"
+              type="submit"
               disabled={isJoining}
               className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2"
             >
@@ -1255,21 +1617,21 @@ export const WatchParty = () => {
               <div className="text-center">
                 <p className="text-xs text-gray-500 mb-2">Want to sign in with Google?</p>
                 <Link 
-                  to={`/login?redirect=/watchparty/${cleanRoomId}`}
+                  to={`/login?redirect=${encodeURIComponent(`/watchparty/${cleanRoomId}${inviteCodeParam ? `?invite=${inviteCodeParam}` : ''}`)}`}
                   className="text-xs font-black uppercase tracking-widest text-emerald-500 hover:text-emerald-400"
                 >
                   Sign in with Google
                 </Link>
               </div>
             )}
-          </div>
+          </form>
 
           <div className="pt-6 border-t border-white/5 space-y-4">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-widest text-center">Share this room</p>
             <div className="flex items-center gap-2 p-2 bg-black/40 rounded-2xl border border-white/5">
               <input 
                 readOnly 
-                value={window.location.origin + `/watchparty/${cleanRoomId}`}
+                value={getRoomShareUrl()}
                 className="flex-1 bg-transparent border-none text-[10px] text-gray-400 px-2 focus:outline-none"
               />
               <button 
@@ -1439,18 +1801,25 @@ export const WatchParty = () => {
             {room.isScreenSharing ? (
               <div className="w-full h-full relative flex items-center justify-center bg-black">
                 {screenStream ? (
-                  <video
-                    ref={(node) => {
-                      screenVideoRef.current = node;
-                      if (node && screenStream && node.srcObject !== screenStream) {
-                        node.srcObject = screenStream;
-                        node.play().catch(() => {});
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-contain"
-                  />
+                  <div className="w-full h-full relative">
+                    <video
+                      ref={(node) => {
+                        screenVideoRef.current = node;
+                        if (node && screenStream && node.srcObject !== screenStream) {
+                          node.srcObject = screenStream;
+                          node.muted = isHost;
+                          node.play().catch(() => {
+                            node.muted = true;
+                            node.play().catch(() => {});
+                          });
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      muted={isHost}
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
                 ) : isHost ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
                     <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
@@ -1489,8 +1858,21 @@ export const WatchParty = () => {
                 updatedAt={room.updatedAt || 0}
                 onPlaybackChange={updateRoomPlayback}
                 onHostPlaybackChange={updateRoomPlayback}
-                onSyncReady={(syncFn) => { ytSyncFnRef.current = syncFn; }}
+                onSyncReady={handleYtSyncReady}
                 isRemoteSyncRef={isRemoteSyncRef}
+              />
+            ) : isNetflixParty ? (
+              <NetflixSyncCompanion
+                room={room}
+                isHost={isHost}
+                extensionBridge={extensionBridge}
+                onManualSync={handleManualNetflixSync}
+                syncDrift={netflixSyncDrift}
+                isSynced={isNetflixSynced}
+                contentMismatch={isContentMismatch}
+                autoSyncEnabled={autoSyncNetflix}
+                onToggleAutoSync={handleToggleAutoSync}
+                onToast={showToast}
               />
             ) : currentIsEmbed ? (
               <iframe 
@@ -1711,16 +2093,16 @@ export const WatchParty = () => {
             )}
 
             {/* Reactions Overlay */}
-            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
               <AnimatePresence>
                 {reactions.map((reaction) => (
                   <motion.div
                     key={reaction.id}
-                    initial={{ y: '100%', x: getXPos(reaction.id), opacity: 0, scale: 0.5 }}
-                    animate={{ y: '-20%', opacity: [0, 1, 1, 0], scale: [0.5, 1.5, 1.5, 1] }}
+                    initial={{ y: 0, x: getXPos(reaction.id), opacity: 0, scale: 0.6 }}
+                    animate={{ y: '-220px', opacity: [0, 1, 1, 0], scale: [0.6, 1.2, 1.05, 0.85] }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 3, ease: "easeOut" }}
-                    className="absolute bottom-0 text-4xl"
+                    transition={{ duration: 1.2, ease: "easeOut" }}
+                    className="absolute bottom-6 text-2xl sm:text-3xl filter drop-shadow select-none"
                   >
                     {reaction.emoji}
                   </motion.div>
@@ -2017,6 +2399,24 @@ export const WatchParty = () => {
                   </div>
                 )}
               </div>
+
+              <div className="pt-6 mt-6 border-t border-white/5 space-y-2">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">Share Invite Link</p>
+                <div className="flex items-center gap-2 p-2 bg-black/40 rounded-2xl border border-white/5">
+                  <input 
+                    readOnly 
+                    value={getRoomShareUrl()}
+                    className="flex-1 bg-transparent border-none text-[10px] text-gray-400 px-2 focus:outline-none"
+                  />
+                  <button 
+                    onClick={handleCopyLink}
+                    className="p-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-xl transition-all flex items-center gap-1 text-xs font-bold"
+                  >
+                    {copied ? <Check size={14} /> : <Share2 size={14} />}
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}
@@ -2081,31 +2481,44 @@ export const WatchParty = () => {
               exit={{ scale: 0.9, opacity: 0 }}
               className="relative w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-[32px] p-8 shadow-2xl text-center space-y-6"
             >
-              <div className="w-20 h-20 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto">
-                <X size={40} />
+              <div className="w-20 h-20 bg-amber-500/15 text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
+                <LogOut size={36} />
               </div>
               <div className="space-y-2">
-                <h3 className="text-2xl font-black text-white">End Watch Party?</h3>
-                <p className="text-gray-400">As the host, leaving will end the session for everyone. Are you sure?</p>
+                <h3 className="text-2xl font-black text-white">Leave Watch Party?</h3>
+                <p className="text-gray-400 text-sm leading-relaxed">
+                  Leaving exits your current viewing session. Your room and its stream settings remain saved under <span className="text-emerald-400 font-bold">My Watch Parties</span> on your Home page so you can return anytime.
+                </p>
               </div>
-              <div className="flex flex-col gap-3 pt-4">
+              <div className="flex flex-col gap-3 pt-2">
                 <button 
-                  onClick={() => confirmLeaveRoom(true)}
-                  className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-2xl transition-all shadow-lg shadow-red-900/20"
+                  id="leave-room-temporarily-btn"
+                  onClick={() => confirmLeaveRoom(false)}
+                  disabled={isLeavingRoom}
+                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-2xl transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2 text-sm"
                 >
-                  End Party for Everyone
+                  {isLeavingRoom ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <LogOut size={16} /> Leave Room Temporarily (Keep Room Saved)
+                    </>
+                  )}
                 </button>
                 <button 
-                  onClick={() => confirmLeaveRoom(false)}
-                  className="w-full py-4 bg-white/5 hover:bg-white/10 text-white font-bold rounded-2xl transition-all border border-white/10"
+                  id="end-delete-room-btn"
+                  onClick={() => confirmLeaveRoom(true)}
+                  disabled={isLeavingRoom}
+                  className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 disabled:opacity-50 text-red-400 hover:text-red-300 font-bold rounded-2xl transition-all border border-red-500/20 text-xs flex items-center justify-center gap-2"
                 >
-                  Just Leave (Keep Active)
+                  <Trash2 size={14} /> End & Delete Room Permanently
                 </button>
                 <button 
                   onClick={() => setIsLeaveConfirmationOpen(false)}
-                  className="w-full py-4 text-gray-500 font-bold hover:text-white transition-all"
+                  disabled={isLeavingRoom}
+                  className="w-full py-2.5 text-gray-400 font-bold hover:text-white transition-all text-xs disabled:opacity-50"
                 >
-                  Cancel
+                  Stay in Party
                 </button>
               </div>
             </motion.div>

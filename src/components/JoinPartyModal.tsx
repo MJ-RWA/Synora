@@ -27,7 +27,18 @@ export const JoinPartyModal: React.FC<JoinPartyModalProps> = ({ isOpen, onClose 
       return;
     }
 
-    // If a full URL is pasted, extract the roomId
+    // If a full URL is pasted, extract the roomId and optional invite parameter
+    let inviteParam = '';
+    if (input.includes('invite=')) {
+      try {
+        const urlObj = new URL(input.startsWith('http') ? input : `http://dummy.com/${input}`);
+        inviteParam = urlObj.searchParams.get('invite') || '';
+      } catch {
+        const match = input.match(/[?&]invite=([^&]+)/);
+        if (match) inviteParam = match[1];
+      }
+    }
+
     if (input.includes('/watchparty/')) {
       const parts = input.split('/watchparty/');
       input = parts[1]?.split('?')[0] || input;
@@ -37,12 +48,18 @@ export const JoinPartyModal: React.FC<JoinPartyModalProps> = ({ isOpen, onClose 
     } else if (input.includes('/room/')) {
       const parts = input.split('/room/');
       input = parts[1]?.split('?')[0] || input;
+    } else {
+      input = input.split('?')[0];
     }
 
-    const name = nickname.trim() || user?.displayName || 'Guest';
+    const name = nickname.trim() || user?.displayName || '';
 
     onClose();
-    navigate(`/watchparty/${input}?username=${encodeURIComponent(name)}`);
+    const queryParams = new URLSearchParams();
+    if (name) queryParams.set('username', name);
+    if (inviteParam) queryParams.set('invite', inviteParam);
+    const queryString = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    navigate(`/watchparty/${input}${queryString}`);
   };
 
   return (

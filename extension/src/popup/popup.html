@@ -36,7 +36,48 @@
         <div class="site-subtext" id="siteSubtext">Supported sites: Netflix & Synora Watch Party</div>
       </div>
 
-      <!-- Section 2: Watch Party Room Connection -->
+      <!-- Section 2: Netflix Playback Diagnostics -->
+      <div class="card" id="netflixCard">
+        <div class="card-header">
+          <span class="card-title">Netflix Playback</span>
+          <span class="pill" id="netflixPlayerPill">Inactive</span>
+        </div>
+
+        <div id="netflixInactiveBox" class="netflix-box">
+          <div class="site-info" id="netflixInactiveTitle">No Netflix Tab Detected</div>
+          <div class="site-subtext" id="netflixInactiveSubtext">Open Netflix in your browser to monitor playback.</div>
+          <button type="button" id="openNetflixBtn" class="btn btn-outline">Open Netflix ↗</button>
+        </div>
+
+        <div id="netflixActiveBox" class="netflix-box hidden">
+          <div class="netflix-meta">
+            <div class="netflix-title" id="netflixMediaTitle">Unknown Title</div>
+            <div class="netflix-id" id="netflixMediaId">ID: --</div>
+          </div>
+
+          <div class="playback-monitor">
+            <div class="time-readout">
+              <span id="currentTimeDisplay">00:00</span>
+              <span class="time-sep">/</span>
+              <span id="durationDisplay">00:00</span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="playbackProgressFill"></div>
+            </div>
+          </div>
+
+          <div class="controls-toolbar">
+            <button type="button" id="netflixPlayBtn" class="btn btn-sm btn-control" title="Play">▶ Play</button>
+            <button type="button" id="netflixPauseBtn" class="btn btn-sm btn-control" title="Pause">⏸ Pause</button>
+            <button type="button" id="netflixSeekBackBtn" class="btn btn-sm btn-control" title="Back 10s">-10s</button>
+            <button type="button" id="netflixSeekForwardBtn" class="btn btn-sm btn-control" title="Forward 10s">+10s</button>
+          </div>
+
+          <div class="diag-feedback" id="diagFeedback">Waiting for action...</div>
+        </div>
+      </div>
+
+      <!-- Section 3: Watch Party Room Connection -->
       <div class="card">
         <div class="card-header">
           <span class="card-title">Watch Party Connection</span>

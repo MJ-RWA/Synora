@@ -9,6 +9,19 @@ export interface User {
   createdAt: string;
 }
 
+export interface NetflixRoomPlayback {
+  status: 'playing' | 'paused';
+  position: number;
+  updatedAt: number;
+  contentId: string;
+  contentTitle?: string;
+  rawUrl?: string;
+  season?: number | null;
+  episode?: number | null;
+  hostId: string;
+  hostName?: string;
+}
+
 export interface WatchRoom {
   id: string;
   title: string;
@@ -16,12 +29,16 @@ export interface WatchRoom {
   currentTime: number;
   playing: boolean;
   hostId: string;
+  ownerId?: string;
   hostName: string;
   createdAt: string;
   updatedAt?: number;
   subtitle?: string;
   usersCount: number;
   isActive: boolean;
+  isPrivate?: boolean;
+  inviteCode?: string;
+  allowedUsers?: string[];
   isScreenSharing?: boolean;
   screenHostId?: string | null;
   movieId?: string | null;
@@ -29,6 +46,8 @@ export interface WatchRoom {
   episodeId?: string | null;
   contentType?: string;
   contentId?: string | null;
+  sourceType?: string;
+  netflixPlayback?: NetflixRoomPlayback | null;
 }
 
 export interface WatchRoomMessage {

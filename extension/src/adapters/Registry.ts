@@ -35,10 +35,7 @@ export class AdapterRegistry {
     try {
       const parsed = new URL(url);
       if (parsed.hostname.includes('netflix.com')) {
-        const adapter = this.adapters.get('netflix');
-        if (adapter && (await adapter.isAvailable())) {
-          return adapter;
-        }
+        return this.adapters.get('netflix') || null;
       }
     } catch {
       // Invalid URL format

@@ -43,6 +43,11 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
   const pendingCandidates = useRef<{ [peerId: string]: RTCIceCandidateInit[] }>({});
   const hasRequestedStreamRef = useRef(false);
 
+  const onStreamReadyRef = useRef(onStreamReady);
+  useEffect(() => {
+    onStreamReadyRef.current = onStreamReady;
+  }, [onStreamReady]);
+
   const cleanRoomId = roomId ? decodeURIComponent(roomId).trim() : '';
   const myId = userId || username;
 
@@ -66,8 +71,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     });
     peerConnections.current = {};
     pendingCandidates.current = {};
-    if (onStreamReady) onStreamReady(null);
-  }, [onStreamReady]);
+    if (onStreamReadyRef.current) onStreamReadyRef.current(null);
+  }, []);
 
   // Create or retrieve an RTCPeerConnection for a specific remote peer
   const getOrCreatePeerConnection = useCallback((targetUserId: string) => {
@@ -106,8 +111,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     pc.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
         setIsConnecting(false);
-        if (onStreamReady) {
-          onStreamReady(event.streams[0]);
+        if (onStreamReadyRef.current) {
+          onStreamReadyRef.current(event.streams[0]);
         }
       }
     };
@@ -120,7 +125,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     }
 
     return pc;
-  }, [cleanRoomId, myId, onStreamReady]);
+  }, [cleanRoomId, myId]);
 
   // Process queued ICE candidates after remote description is set
   const processPendingCandidates = useCallback((peerId: string, pc: RTCPeerConnection) => {
@@ -211,7 +216,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
               }
             } else if (data.type === 'screen-stop') {
               // Host stopped sharing
-              if (onStreamReady) onStreamReady(null);
+              if (onStreamReadyRef.current) onStreamReadyRef.current(null);
               setIsConnecting(false);
               const pc = peerConnections.current[fromPeer];
               if (pc) {
@@ -238,7 +243,12 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     return () => {
       unsubscribe();
     };
-  }, [cleanRoomId, myId, getOrCreatePeerConnection, processPendingCandidates, onStreamReady]);
+  }, [cleanRoomId, myId, getOrCreatePeerConnection, processPendingCandidates]);
+
+  const isConnectingRef = useRef(isConnecting);
+  useEffect(() => {
+    isConnectingRef.current = isConnecting;
+  }, [isConnecting]);
 
   // If user is a viewer/participant and the room has active screen sharing, request the stream from host
   useEffect(() => {
@@ -268,8 +278,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     }
 
     const interval = setInterval(() => {
-      // Periodic retry if still connecting after 5 seconds
-      if (isConnecting) {
+      // Periodic retry if still connecting after 6 seconds
+      if (isConnectingRef.current) {
         requestStream();
       }
     }, 6000);
@@ -278,7 +288,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       clearInterval(interval);
       hasRequestedStreamRef.current = false;
     };
-  }, [isHost, isScreenSharingActive, cleanRoomId, myId, hostId, isConnecting]);
+  }, [isHost, isScreenSharingActive, cleanRoomId, myId, hostId]);
 
   // Clean up on component unmount
   useEffect(() => {

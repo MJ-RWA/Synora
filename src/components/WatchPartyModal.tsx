@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
-import { collection, doc, writeBatch } from 'firebase/firestore';
+import { collection, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { SAMPLE_MEDIA, SampleMedia } from '../config/sampleMedia';
-import { X, Film, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Check, AlertCircle, LogIn, Loader2 } from 'lucide-react';
+import { X, Film, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2, Check } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useExtensionBridge } from '../hooks/useExtensionBridge';
 
 interface WatchPartyModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ interface WatchPartyModalProps {
   defaultVideoUrl?: string;
   defaultTitle?: string;
   defaultSample?: SampleMedia | null;
+  defaultTab?: 'sample' | 'custom' | 'embed' | 'screen' | 'netflix';
 }
 
 export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({ 
@@ -19,14 +21,18 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
   onClose,
   defaultVideoUrl = '',
   defaultTitle = '',
-  defaultSample = null
+  defaultSample = null,
+  defaultTab
 }) => {
   const navigate = useNavigate();
   const { user, loading: authLoading, loginWithGoogle } = useAuth();
-  const [activeTab, setActiveTab] = useState<'sample' | 'custom' | 'embed' | 'screen'>('sample');
+  const extensionBridge = useExtensionBridge();
+  const [activeTab, setActiveTab] = useState<'sample' | 'custom' | 'embed' | 'screen' | 'netflix'>(defaultTab || 'sample');
   const [username, setUsername] = useState(user?.displayName || '');
   const [roomTitle, setRoomTitle] = useState(defaultTitle || '');
   const [customUrl, setCustomUrl] = useState(defaultVideoUrl || '');
+  const [netflixUrl, setNetflixUrl] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
   const [subtitleUrl, setSubtitleUrl] = useState('');
   const [selectedSample, setSelectedSample] = useState<SampleMedia | null>(defaultSample || SAMPLE_MEDIA[0]);
   const [creating, setCreating] = useState(false);
@@ -36,20 +42,34 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
   // Sync props when opened or selected sample changes
   React.useEffect(() => {
     if (isOpen) {
+      if (defaultTab) {
+        setActiveTab(defaultTab);
+      }
       if (defaultSample) {
         setSelectedSample(defaultSample);
         setRoomTitle(defaultSample.title);
         setCustomUrl(defaultSample.videoUrl);
-        setActiveTab('sample');
+        if (!defaultTab) setActiveTab('sample');
       } else if (defaultVideoUrl) {
-        setCustomUrl(defaultVideoUrl);
+        if (defaultVideoUrl.includes('netflix.com')) {
+          setNetflixUrl(defaultVideoUrl);
+          if (!defaultTab) setActiveTab('netflix');
+        } else {
+          setCustomUrl(defaultVideoUrl);
+        }
         if (defaultTitle) setRoomTitle(defaultTitle);
       }
       if (user?.displayName) {
         setUsername(prev => prev || user.displayName || '');
       }
+      // If extension currently has Netflix active, pre-populate
+      if (extensionBridge.netflixState.isAvailable && extensionBridge.netflixState.content) {
+        const netflixContent = extensionBridge.netflixState.content;
+        setNetflixUrl(prev => prev || netflixContent.rawUrl);
+        setRoomTitle(prev => prev || (netflixContent.title ? `Netflix: ${netflixContent.title}` : ''));
+      }
     }
-  }, [isOpen, defaultSample, defaultVideoUrl, defaultTitle, user]);
+  }, [isOpen, defaultSample, defaultVideoUrl, defaultTitle, defaultTab, user, extensionBridge.netflixState]);
 
   if (!isOpen) return null;
 
@@ -63,7 +83,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
     }
   };
 
-  const handleCreateRoom = async (sourceType: 'sample' | 'custom' | 'embed' | 'screen', sampleItem?: SampleMedia) => {
+  const handleCreateRoom = async (sourceType: 'sample' | 'custom' | 'embed' | 'screen' | 'netflix', sampleItem?: SampleMedia) => {
     // 1. Prevent double submission synchronously
     if (creating || isSubmittingRef.current) return;
 
@@ -107,6 +127,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       let videoUrl = '';
       let isScreenSharing = false;
       let subtitle = subtitleUrl.trim();
+      let netflixPlayback = null;
 
       if (sourceType === 'sample') {
         const media = sampleItem || selectedSample || SAMPLE_MEDIA[0];
@@ -147,6 +168,35 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         isScreenSharing = true;
         videoUrl = '';
         if (!finalTitle) finalTitle = `${finalName}'s Live Screen Party`;
+      } else if (sourceType === 'netflix') {
+        const extContent = extensionBridge.netflixState.content;
+        const extState = extensionBridge.netflixState.state;
+        const cleanUrl = netflixUrl.trim() || (extContent?.rawUrl || 'https://www.netflix.com/watch');
+        videoUrl = cleanUrl;
+        
+        let contentId = extContent?.id || '';
+        if (!contentId) {
+          const match = cleanUrl.match(/\/watch\/(\d+)/);
+          if (match) contentId = match[1];
+        }
+
+        const detectedTitle = extContent?.title;
+        if (!finalTitle) {
+          finalTitle = detectedTitle ? `Netflix: ${detectedTitle}` : `${finalName}'s Netflix Party`;
+        }
+
+        netflixPlayback = {
+          status: (extState?.isPlaying ? 'playing' : 'paused') as 'playing' | 'paused',
+          position: extState?.currentTime || 0,
+          updatedAt: Date.now(),
+          contentId: contentId || 'netflix_stream',
+          contentTitle: detectedTitle || finalTitle,
+          rawUrl: cleanUrl,
+          season: extContent?.season ?? null,
+          episode: extContent?.episode ?? null,
+          hostId: currentUser.uid,
+          hostName: finalName,
+        };
       }
 
       const hostUid = currentUser.uid;
@@ -156,6 +206,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       // Generate room document reference synchronously so ID is known immediately
       const roomRef = doc(collection(db, 'watchRooms'));
       const roomId = roomRef.id;
+      const inviteCode = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 6);
 
       const roomData = {
         title: finalTitle || 'Watch Party Room',
@@ -163,35 +214,76 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         currentTime: 0,
         playing: true,
         hostId: hostUid,
+        ownerId: hostUid,
         hostName: finalName,
         createdAt: nowIso,
         updatedAt: nowEpoch,
         subtitle: subtitle || '',
         usersCount: 1,
         isActive: true,
+        isPrivate: Boolean(isPrivate),
+        inviteCode,
+        allowedUsers: [hostUid],
         isScreenSharing: Boolean(isScreenSharing),
         screenHostId: isScreenSharing ? hostUid : null,
-        sourceType
+        sourceType,
+        netflixPlayback: netflixPlayback
       };
 
-      // Atomic batch write: room doc + host participant subcollection doc in single round-trip
-      const batch = writeBatch(db);
-      batch.set(roomRef, roomData);
+      // 1. Commit room document to Firestore
+      const commitPromise = setDoc(roomRef, roomData);
 
+      // 2. Add host participant record in users subcollection asynchronously in background
       const hostUserRef = doc(db, `watchRooms/${roomId}/users`, hostUid);
-      batch.set(hostUserRef, {
+      setDoc(hostUserRef, {
         username: finalName,
         uid: hostUid,
         isHost: true,
         joinedAt: nowIso,
         speaking: false
+      }).catch((hostDocErr) => {
+        console.warn('Initial host participant doc write note:', hostDocErr);
       });
 
-      await batch.commit();
+      // 3. Persist to local storage so user NEVER loses their created rooms
+      try {
+        const savedRoomsKey = 'synora_created_rooms';
+        const existing = JSON.parse(localStorage.getItem(savedRoomsKey) || '[]');
+        const updated = [{
+          id: roomId,
+          title: finalTitle,
+          createdAt: nowIso,
+          hostId: hostUid,
+          isHost: true,
+          sourceType,
+          videoUrl: videoUrl || '',
+          isPrivate: Boolean(isPrivate)
+        }, ...existing.filter((r: { id: string }) => r.id !== roomId)].slice(0, 30);
+        localStorage.setItem(savedRoomsKey, JSON.stringify(updated));
 
-      // Navigate immediately to the room without blocking on unnecessary operations
+        const idListKey = 'synora_saved_room_ids';
+        const existingIds = JSON.parse(localStorage.getItem(idListKey) || '[]');
+        if (!existingIds.includes(roomId)) {
+          localStorage.setItem(idListKey, JSON.stringify([roomId, ...existingIds].slice(0, 50)));
+        }
+      } catch (storageErr) {
+        console.warn('LocalStorage save note:', storageErr);
+      }
+
+      // Fast-race the commit so if the network roundtrip is slow, user transitions instantly
+      await Promise.race([
+        commitPromise,
+        new Promise(resolve => setTimeout(resolve, 300))
+      ]);
+
+      // 4. Navigate instantly to the room with preloaded state
       onClose();
-      navigate(`/watchparty/${roomId}?username=${encodeURIComponent(finalName)}`);
+      navigate(`/watchparty/${roomId}?username=${encodeURIComponent(finalName)}&invite=${inviteCode}`, {
+        state: {
+          initialRoom: { id: roomId, ...roomData },
+          isHostCreation: true
+        }
+      });
     } catch (err: unknown) {
       console.error('Error creating watch room:', err);
       const errorObj = err as { code?: string; message?: string };
@@ -301,25 +393,38 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
           {/* Source Tabs */}
           <div className="space-y-3">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Choose Content Source</label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
               <button 
                 type="button"
                 onClick={() => setActiveTab('sample')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'sample' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <Film size={15} /> Sample Films
+                <Film size={15} /> Samples
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTab('netflix')}
+                disabled={creating}
+                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'netflix' 
+                    ? 'bg-red-600 text-white shadow-md' 
+                    : 'text-gray-400 hover:text-white'
+                } disabled:opacity-50`}
+              >
+                <Tv size={15} className="text-white" /> Netflix
               </button>
 
               <button 
                 type="button"
                 onClick={() => setActiveTab('custom')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'custom' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
@@ -332,29 +437,96 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('embed')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'embed' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <Youtube size={15} /> Web / YouTube
+                <Youtube size={15} /> YouTube
               </button>
 
               <button 
                 type="button"
                 onClick={() => setActiveTab('screen')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'screen' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <Monitor size={15} /> Screen Share
+                <Monitor size={15} /> Screen
               </button>
             </div>
           </div>
+
+          {/* Source Panels */}
+          {activeTab === 'netflix' && (
+            <div className="space-y-4 bg-gradient-to-br from-red-950/30 to-black p-5 rounded-2xl border border-red-500/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center font-black text-sm shadow-md">
+                    N
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Netflix Synchronized Watch Party</h4>
+                    <p className="text-[11px] text-gray-400">Host controls playback for all participants via browser extension</p>
+                  </div>
+                </div>
+
+                {extensionBridge.netflixState.isAvailable ? (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Netflix Tab Detected
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Extension Bridge Ready
+                  </span>
+                )}
+              </div>
+
+              {extensionBridge.netflixState.isAvailable && extensionBridge.netflixState.content && (
+                <div className="p-3.5 bg-white/5 rounded-xl border border-white/10 flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Active Title on Netflix</span>
+                    <h5 className="text-sm font-black text-white">{extensionBridge.netflixState.content.title}</h5>
+                    <p className="text-[11px] text-gray-400">
+                      ID: {extensionBridge.netflixState.content.id} • Status: {extensionBridge.netflixState.state?.isPlaying ? 'Playing' : 'Paused'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (extensionBridge.netflixState.content) {
+                        setNetflixUrl(extensionBridge.netflixState.content.rawUrl);
+                        setRoomTitle(`Netflix: ${extensionBridge.netflixState.content.title}`);
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-red-600/30 hover:bg-red-600 text-red-200 hover:text-white rounded-lg text-xs font-bold transition-all shrink-0"
+                  >
+                    Use This Title
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-300">Netflix Watch URL or Video ID</label>
+                <input 
+                  type="url" 
+                  value={netflixUrl}
+                  onChange={(e) => setNetflixUrl(e.target.value)}
+                  placeholder="https://www.netflix.com/watch/80057281"
+                  disabled={creating}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-3.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-red-500/50 disabled:opacity-50"
+                />
+                <p className="text-[11px] text-gray-400">
+                  Open Netflix in another tab or paste your Netflix watch URL. When you play, pause, or seek, all participants stay in lockstep.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Source Panels */}
           {activeTab === 'sample' && (
@@ -457,6 +629,60 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
               </p>
             </div>
           )}
+
+          {/* Room Privacy Selector */}
+          <div className="space-y-2 pt-2 border-t border-white/5">
+            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Room Privacy</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPrivate(false)}
+                disabled={creating}
+                className={`p-3 rounded-xl border text-left transition-all flex items-start gap-3 ${
+                  !isPrivate 
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-white shadow-sm' 
+                    : 'bg-white/5 border-white/5 text-gray-400 hover:border-white/20'
+                }`}
+              >
+                <div className={`p-2 rounded-lg shrink-0 ${!isPrivate ? 'bg-emerald-500 text-black' : 'bg-white/10 text-gray-400'}`}>
+                  <Globe size={16} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <span>Public Party</span>
+                    {!isPrivate && <CheckCircle2 size={13} className="text-emerald-400" />}
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-tight mt-0.5">
+                    Visible on Active Watch Parties list. Friends can easily discover and join.
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsPrivate(true)}
+                disabled={creating}
+                className={`p-3 rounded-xl border text-left transition-all flex items-start gap-3 ${
+                  isPrivate 
+                    ? 'bg-emerald-500/10 border-emerald-500/50 text-white shadow-sm' 
+                    : 'bg-white/5 border-white/5 text-gray-400 hover:border-white/20'
+                }`}
+              >
+                <div className={`p-2 rounded-lg shrink-0 ${isPrivate ? 'bg-emerald-500 text-black' : 'bg-white/10 text-gray-400'}`}>
+                  <Lock size={16} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <span>Private Room</span>
+                    {isPrivate && <CheckCircle2 size={13} className="text-emerald-400" />}
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-tight mt-0.5">
+                    Hidden from public list. Only participants with direct link or invite code can join.
+                  </p>
+                </div>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Footer CTA */}

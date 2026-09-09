@@ -36,6 +36,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: new Date().toISOString()
         };
         setUserData(fallbackUser);
+        setLoading(false);
 
         try {
           const docRef = doc(db, 'users', u.uid);
@@ -45,16 +46,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               if (docSnap.exists()) {
                 setUserData({ uid: u.uid, ...docSnap.data() } as User);
               }
-              setLoading(false);
             },
             (error) => {
               console.warn("User profile sync fallback:", error.message);
-              setLoading(false);
             }
           );
         } catch (err) {
           console.warn("User listener init error:", err);
-          setLoading(false);
         }
       } else {
         setUserData(null);
