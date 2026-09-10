@@ -11,6 +11,13 @@
         "favorites": { "type": "array", "items": { "type": "string" } },
         "history": { "type": "array", "items": { "type": "string" } },
         "friends": { "type": "array", "items": { "type": "string" } },
+        "bio": { "type": "string" },
+        "customStatus": { "type": "string" },
+        "totalWatchSeconds": { "type": "number" },
+        "badges": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["online", "offline", "watching", "away"] },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "avatarUrl": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["username", "email", "role"]
@@ -326,7 +333,15 @@
         "properties": {
           "username": { "type": "string" },
           "isHost": { "type": "boolean" },
-          "joinedAt": { "type": "string", "format": "date-time" }
+          "joinedAt": { "type": "string", "format": "date-time" },
+          "uid": { "type": "string" },
+          "speaking": { "type": "boolean" },
+          "mutedByHost": { "type": "boolean" },
+          "micActive": { "type": "boolean" },
+          "avatarUrl": { "type": "string" },
+          "lastSeen": { "type": "number" },
+          "connectionStatus": { "type": "string", "enum": ["online", "offline"] },
+          "status": { "type": "string", "enum": ["watching", "away", "idle", "online", "offline"] }
         }
       },
       "description": "Users in room"

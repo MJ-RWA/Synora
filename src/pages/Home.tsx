@@ -29,7 +29,9 @@ import {
   CheckCircle2,
   Laptop,
   ShieldCheck,
-  PlayCircle
+  PlayCircle,
+  Award,
+  Clock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { WatchPartyModal } from '../components/WatchPartyModal';
@@ -670,6 +672,91 @@ export const Home = () => {
               <p className="text-xs text-gray-400 leading-relaxed">
                 If a guest’s video falls behind due to network buffering, the player automatically snaps back into sync with the host.
               </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Social Watch Party Platform Showcase */}
+      <section id="social-features" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="text-center max-w-2xl mx-auto mb-12">
+          <span className="px-3.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-black uppercase tracking-widest">
+            Social Platform
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-black text-white mt-3 tracking-tight">
+            More Than Just Playback
+          </h2>
+          <p className="text-gray-400 text-sm mt-2">
+            Synora bridges the gap between streaming and social connection. Build your profile, track viewing time, and foster private communities.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 flex flex-col justify-between hover:border-emerald-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                <Clock size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white group-hover:text-emerald-400 transition-colors">
+                Watch Time & Stats
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Automatically tracks your total hours spent co-watching with friends across movies, YouTube, and streams.
+              </p>
+            </div>
+            <div className="mt-6 pt-4 border-t border-white/5 text-[11px] font-semibold text-emerald-400 flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> Live Profile Tracking
+            </div>
+          </div>
+
+          <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 flex flex-col justify-between hover:border-amber-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                <Award size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white group-hover:text-amber-400 transition-colors">
+                Badges & Achievements
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Unlock badges like First Sync, Movie Marathoner, and Night Owl as you host parties and watch with your squad.
+              </p>
+            </div>
+            <div className="mt-6 pt-4 border-t border-white/5 text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> Milestone Unlocks
+            </div>
+          </div>
+
+          <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 flex flex-col justify-between hover:border-blue-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
+                <Users size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white group-hover:text-blue-400 transition-colors">
+                Friend Network & Presence
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Add friends directly from your room. See who is online or currently watching, and send instant room invites.
+              </p>
+            </div>
+            <div className="mt-6 pt-4 border-t border-white/5 text-[11px] font-semibold text-blue-400 flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> Real-Time Presence
+            </div>
+          </div>
+
+          <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 flex flex-col justify-between hover:border-purple-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
+                <Shield size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white group-hover:text-purple-400 transition-colors">
+                Host Moderation Tools
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Hosts retain full control over room audio with individual participant muting, kick options, and private room codes.
+              </p>
+            </div>
+            <div className="mt-6 pt-4 border-t border-white/5 text-[11px] font-semibold text-purple-400 flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> Host-Authoritative
             </div>
           </div>
         </div>

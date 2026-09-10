@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { doc, onSnapshot, updateDoc, getDoc, getDocs, collection, addDoc, query, orderBy, limit, increment, setDoc, deleteDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -13,6 +13,9 @@ import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
 import { YouTubeSyncPlayer } from '../components/YouTubeSyncPlayer';
 import { NetflixSyncCompanion } from '../components/NetflixSyncCompanion';
+import { SocialParticipantModal } from '../components/SocialParticipantModal';
+import { recordWatchTime } from '../services/socialService';
+import { isUserLive, sendHeartbeat, markUserOffline, formatLastSeen, HEARTBEAT_INTERVAL_MS } from '../services/presenceService';
 
 // Helper to extract YouTube video ID if URL is YouTube
 const getYouTubeVideoId = (url?: string): string | null => {
@@ -58,11 +61,31 @@ export const WatchParty = () => {
   const [messages, setMessages] = useState<WatchRoomMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [reactions, setReactions] = useState<WatchRoomReaction[]>([]);
-  const [liveUsers, setLiveUsers] = useState<WatchRoomUser[]>([]);
+  const [allRoomUsers, setAllRoomUsers] = useState<WatchRoomUser[]>([]);
+  const [presenceTick, setPresenceTick] = useState<number>(() => Date.now());
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'chat' | 'participants'>('chat');
+
+  // Derive LIVE watching participants vs offline / disconnected participants
+  const liveUsers = useMemo(() => {
+    return allRoomUsers.filter(u => isUserLive(u, presenceTick));
+  }, [allRoomUsers, presenceTick]);
+
+  const offlineUsers = useMemo(() => {
+    return allRoomUsers.filter(u => !isUserLive(u, presenceTick));
+  }, [allRoomUsers, presenceTick]);
+
+  // Periodic local tick to evaluate participant presence in real-time
+  useEffect(() => {
+    const tickInterval = setInterval(() => {
+      setPresenceTick(Date.now());
+    }, 3000);
+    return () => clearInterval(tickInterval);
+  }, []);
   const [typingUsers, setTypingUsers] = useState<{ [uid: string]: string }>({});
   const [speakingUsers, setSpeakingUsers] = useState<{ [uid: string]: boolean }>({});
   const [selectedUser, setSelectedUser] = useState<WatchRoomUser | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [isScreenAudioMuted, setIsScreenAudioMuted] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isChangeMovieModalOpen, setIsChangeMovieModalOpen] = useState(false);
   const [isLeaveConfirmationOpen, setIsLeaveConfirmationOpen] = useState(false);
@@ -167,6 +190,27 @@ export const WatchParty = () => {
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
   const handleJoinRef = useRef<(name?: string) => Promise<void>>(() => Promise.resolve());
 
+  // Host moderation check: determine if current participant is muted by host
+  const currentParticipant = liveUsers.find(u => (user?.uid && u.uid === user.uid) || u.id === effectiveUserId || u.username === username);
+  const isHostMuted = Boolean(currentParticipant?.mutedByHost);
+
+  // Active watch time tracking and achievement progression
+  useEffect(() => {
+    if (!user?.uid || !room || !room.playing || !hasJoined) return;
+
+    const interval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const newBadges = await recordWatchTime(user.uid, 30, isHost);
+      if (newBadges.length > 0) {
+        newBadges.forEach(badgeId => {
+          showToast(`🏆 Achievement Unlocked: ${badgeId.replace(/_/g, ' ').toUpperCase()}!`);
+        });
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [user?.uid, room, hasJoined, isHost]);
+
   function showToast(message: string) {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message }]);
@@ -218,7 +262,10 @@ export const WatchParty = () => {
         uid: currentUid,
         isHost: isHostUser,
         joinedAt: new Date().toISOString(),
-        speaking: false
+        speaking: false,
+        lastSeen: Date.now(),
+        connectionStatus: 'online',
+        status: 'watching'
       }, { merge: true }).catch((err) => {
         console.warn("User doc non-fatal sync error:", err);
       });
@@ -416,7 +463,7 @@ export const WatchParty = () => {
       }
 
       const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WatchRoomUser));
-      setLiveUsers(users);
+      setAllRoomUsers(users);
 
       // Persistence check for guests and logged in users
       const currentUser = userRef.current;
@@ -470,6 +517,68 @@ export const WatchParty = () => {
       unsubscribeTyping();
     };
   }, [cleanRoomId, user?.uid, authLoading, effectiveUserId, inviteRedeemTrigger, inviteCodeParam, queryUsername, initialRoomFromState]);
+
+  // Real-time presence heartbeat & lifecycle tracking
+  useEffect(() => {
+    if (!cleanRoomId || !hasJoined) return;
+    const currentUid = userRef.current?.uid || effectiveUserId;
+    if (!currentUid) return;
+
+    // Send immediate heartbeat on join/reconnect
+    sendHeartbeat(cleanRoomId, currentUid);
+
+    const heartbeatTimer = setInterval(() => {
+      sendHeartbeat(cleanRoomId, currentUid);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat(cleanRoomId, currentUid);
+      }
+    };
+
+    const handleOnline = () => {
+      sendHeartbeat(cleanRoomId, currentUid);
+    };
+
+    const handleOffline = () => {
+      markUserOffline(cleanRoomId, currentUid);
+    };
+
+    const handleUnload = () => {
+      markUserOffline(cleanRoomId, currentUid);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+
+    return () => {
+      clearInterval(heartbeatTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+      markUserOffline(cleanRoomId, currentUid);
+    };
+  }, [cleanRoomId, hasJoined, effectiveUserId]);
+
+  // Host periodic check to sync any stale timed-out participants to 'offline' in Firestore
+  useEffect(() => {
+    if (!isHost || !cleanRoomId) return;
+    const staleUsers = allRoomUsers.filter(u => u.connectionStatus !== 'offline' && !isUserLive(u, presenceTick));
+    if (staleUsers.length > 0) {
+      staleUsers.forEach(staleUser => {
+        const uid = staleUser.id || staleUser.uid;
+        if (uid) {
+          markUserOffline(cleanRoomId, uid);
+        }
+      });
+    }
+  }, [isHost, cleanRoomId, allRoomUsers, presenceTick]);
 
   // Pre-fill default nickname from user profile or URL parameter without skipping the username prompt
   useEffect(() => {
@@ -1024,10 +1133,26 @@ export const WatchParty = () => {
   }, [room]);
 
   useEffect(() => {
-    if (screenVideoRef.current && screenStream) {
-      screenVideoRef.current.srcObject = screenStream;
+    const videoNode = screenVideoRef.current;
+    if (videoNode && screenStream) {
+      if (videoNode.srcObject !== screenStream) {
+        videoNode.srcObject = screenStream;
+      }
+      videoNode.muted = isHost ? true : isScreenAudioMuted;
+      videoNode.play().catch(() => {
+        // Fallback to muted autoplay if browser blocks unmuted playback
+        videoNode.muted = true;
+        setIsScreenAudioMuted(true);
+        videoNode.play().catch(() => {});
+      });
     }
-  }, [screenStream]);
+  }, [screenStream, isHost, isScreenAudioMuted]);
+
+  useEffect(() => {
+    if (!room?.isScreenSharing && !isHost && screenStream) {
+      setScreenStream(null);
+    }
+  }, [room?.isScreenSharing, isHost, screenStream]);
 
   useEffect(() => {
     if (!user) return;
@@ -1060,18 +1185,19 @@ export const WatchParty = () => {
     try {
       const currentUser = userRef.current;
       const currentRoom = roomRef.current;
+      const currentUid = currentUser?.uid || effectiveUserId;
       const isHostUser = Boolean(currentUser?.uid && currentRoom && (currentUser.uid === currentRoom.hostId || currentUser.uid === currentRoom.ownerId));
 
       if (isHostUser) {
         await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
           isScreenSharing: Boolean(stream),
-          screenHostId: stream ? currentUser!.uid : null
+          screenHostId: stream ? currentUid : null
         });
       }
     } catch (error) {
       console.warn('Notice updating screen share state:', error);
     }
-  }, [cleanRoomId]);
+  }, [cleanRoomId, effectiveUserId]);
 
   const inviteFriend = async (friend: User) => {
     if (!cleanRoomId || !user) return;
@@ -1389,8 +1515,9 @@ export const WatchParty = () => {
       setIsLeaveConfirmationOpen(true);
     } else {
       try {
-        if (effectiveUserId) {
-          await deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId)).catch(() => {});
+        const currentUid = userRef.current?.uid || effectiveUserId;
+        if (currentUid) {
+          await markUserOffline(cleanRoomId, currentUid);
           await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
             usersCount: increment(-1)
           }).catch(() => {});
@@ -1423,7 +1550,7 @@ export const WatchParty = () => {
 
       const currentUid = userRef.current?.uid || effectiveUserId;
       if (currentUid) {
-        deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, currentUid)).catch(() => {});
+        await markUserOffline(cleanRoomId, currentUid);
         updateDoc(doc(db, 'watchRooms', cleanRoomId), {
           usersCount: increment(-1)
         }).catch(() => {});
@@ -1698,7 +1825,11 @@ export const WatchParty = () => {
             <div className="flex flex-col">
               <h1 className="text-sm font-bold text-white truncate max-w-[150px] sm:max-w-[250px] md:max-w-md">{room.title}</h1>
               <div className="flex items-center gap-2 text-[9px] text-gray-500 uppercase tracking-widest font-black">
-                <span className="flex items-center gap-1"><Users size={10} /> {liveUsers.length}</span>
+                <span className="flex items-center gap-1.5 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-emerald-400 font-bold">{liveUsers.length} Live</span>
+                  <span className="text-gray-400 font-medium">/ {allRoomUsers.length} Total</span>
+                </span>
                 <span>•</span>
                 <span className={room.playing ? 'text-emerald-500' : 'text-yellow-500'}>{room.playing ? 'Playing' : 'Paused'}</span>
               </div>
@@ -1744,6 +1875,7 @@ export const WatchParty = () => {
               userId={effectiveUserId}
               username={username} 
               muted={muted}
+              mutedByHost={isHostMuted}
               onMuteChange={setMuted}
               onMuteToggle={setMuted}
               onSpeaking={(speakerId) => {
@@ -1762,8 +1894,8 @@ export const WatchParty = () => {
                 userId={effectiveUserId}
                 username={username} 
                 isHost={isHost} 
-                isScreenSharingActive={Boolean(room.isScreenSharing)}
-                hostId={room.screenHostId || room.hostId}
+                isScreenSharingActive={Boolean(room?.isScreenSharing)}
+                hostId={room?.screenHostId || room?.hostId}
                 onStreamReady={handleScreenStream} 
               />
             )}
@@ -1799,26 +1931,73 @@ export const WatchParty = () => {
             </div>
           )}
             {room.isScreenSharing ? (
-              <div className="w-full h-full relative flex items-center justify-center bg-black">
+              <div className="w-full h-full relative flex items-center justify-center bg-black select-none">
                 {screenStream ? (
-                  <div className="w-full h-full relative">
+                  <div className="w-full h-full relative group">
                     <video
                       ref={(node) => {
                         screenVideoRef.current = node;
                         if (node && screenStream && node.srcObject !== screenStream) {
                           node.srcObject = screenStream;
-                          node.muted = isHost;
+                          node.muted = isHost ? true : isScreenAudioMuted;
                           node.play().catch(() => {
                             node.muted = true;
+                            setIsScreenAudioMuted(true);
                             node.play().catch(() => {});
                           });
                         }
                       }}
                       autoPlay
                       playsInline
-                      muted={isHost}
+                      muted={isHost ? true : isScreenAudioMuted}
                       className="w-full h-full object-contain"
                     />
+
+                    {/* Participant Screen Audio and View Controls */}
+                    {!isHost && (
+                      <div className="absolute bottom-4 right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
+                        {isScreenAudioMuted ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (screenVideoRef.current) {
+                                screenVideoRef.current.muted = false;
+                                setIsScreenAudioMuted(false);
+                                screenVideoRef.current.play().catch(() => {});
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all"
+                            title="Click to unmute screen audio"
+                          >
+                            <VolumeX size={14} />
+                            <span>Unmute Audio</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (screenVideoRef.current) {
+                                screenVideoRef.current.muted = true;
+                                setIsScreenAudioMuted(true);
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
+                            title="Mute screen audio"
+                          >
+                            <Volume2 size={14} />
+                            <span>Audio On</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleToggleFullscreen}
+                          className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
+                          title="Fullscreen"
+                        >
+                          <Maximize size={14} />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : isHost ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
@@ -1831,14 +2010,44 @@ export const WatchParty = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
+                  <div className="flex flex-col items-center justify-center p-6 text-center space-y-4">
                     <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 text-emerald-400 flex items-center justify-center animate-pulse">
                       <Monitor size={28} />
                     </div>
                     <div>
                       <h3 className="text-base font-bold text-white">Connecting to Host Screen Share...</h3>
-                      <p className="text-xs text-gray-400 mt-1">Establishing real-time WebRTC video connection</p>
+                      <p className="text-xs text-gray-400 mt-1 max-w-xs">Establishing real-time WebRTC stream connection with host</p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (cleanRoomId) {
+                          const targetHost = room.screenHostId || room.hostId || 'host';
+                          try {
+                            await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                              from: effectiveUserId,
+                              to: targetHost,
+                              type: 'screen-request',
+                              time: new Date().toISOString(),
+                            });
+                            if (targetHost !== 'host') {
+                              await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                                from: effectiveUserId,
+                                to: 'host',
+                                type: 'screen-request',
+                                time: new Date().toISOString(),
+                              }).catch(() => {});
+                            }
+                          } catch (e) {
+                            console.warn('Manual retry error:', e);
+                          }
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Re-request Stream</span>
+                    </button>
                   </div>
                 )}
                 <div className="absolute top-4 left-4 bg-red-600 px-3 py-1 rounded-full flex items-center gap-2 shadow-lg z-20">
@@ -2126,8 +2335,10 @@ export const WatchParty = () => {
           <div className="flex lg:hidden items-center justify-between bg-white/5 p-3 rounded-2xl border border-white/5">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-gray-300">Live Party</span>
-              <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                {liveUsers.length} online
+              <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>{liveUsers.length} Live</span>
+                <span className="text-emerald-200/60 font-normal">/ {allRoomUsers.length} Total</span>
               </span>
             </div>
             <button 
@@ -2194,97 +2405,302 @@ export const WatchParty = () => {
           id="watchparty-live-chat"
           className="scroll-mt-[230px] px-4 sm:px-0 lg:px-0 lg:col-span-1 lg:col-start-4 lg:row-start-1 lg:row-span-2 flex flex-col h-[520px] sm:h-[600px] lg:h-[calc(100vh-120px)] bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden shadow-xl"
         >
-          <div className="p-4 border-b border-white/5 flex items-center justify-between bg-white/5">
-            <div className="flex items-center gap-2">
-              <MessageSquare size={18} className="text-emerald-500" />
-              <h3 className="font-bold text-sm">Live Chat</h3>
-            </div>
-            <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{liveUsers.length} Online</span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-            <div className="flex flex-wrap gap-2 mb-4">
-              <AnimatePresence>
-                {liveUsers.map((u) => (
-                  <motion.button
-                    key={u.id}
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0, opacity: 0 }}
-                    onClick={() => setSelectedUser(u)}
-                    className={`relative w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 transition-all ${
-                      u.speaking || speakingUsers[u.uid || u.username] 
-                        ? 'border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)] scale-110' 
-                        : 'border-white/10'
-                    } ${u.isHost ? 'bg-emerald-500 text-white' : 'bg-white/10 text-gray-400'}`}
-                  >
-                    {u.username[0].toUpperCase()}
-                    {(u.speaking || speakingUsers[u.uid || u.username]) && (
-                      <motion.div
-                        layoutId={`glow-${u.id}`}
-                        className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping"
-                      />
-                    )}
-                  </motion.button>
-                ))}
-              </AnimatePresence>
-            </div>
-
-            {messages.map((msg) => (
-              <div key={msg.id} className="flex flex-col gap-1">
-                <div className="flex items-baseline gap-2">
-                  <span className={`text-xs font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
-                    {msg.username}
-                  </span>
-                  <span className="text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <p className="text-sm text-gray-200 bg-white/5 p-2.5 rounded-xl rounded-tl-none border border-white/5">
-                  {msg.text}
-                </p>
-              </div>
-            ))}
-            <div ref={chatEndRef} />
-          </div>
-
-          <form onSubmit={sendMessage} className="p-4 border-t border-white/5 bg-white/5">
-            <AnimatePresence>
-              {Object.keys(typingUsers).length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
-                  className="text-[10px] text-emerald-500 font-bold mb-2 flex items-center gap-2"
-                >
-                  <div className="flex gap-1">
-                    <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" />
-                    <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.2s]" />
-                    <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.4s]" />
-                  </div>
-                  {Object.values(typingUsers).join(', ')} {Object.keys(typingUsers).length > 1 ? 'are' : 'is'} typing...
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <div className="relative">
-              <input 
-                id="watchparty-chat-input"
-                type="text" 
-                value={newMessage}
-                onChange={(e) => {
-                  setNewMessage(e.target.value);
-                  handleTyping();
-                }}
-                placeholder="Say something..."
-                className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-4 pr-12 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-              />
-              <button 
-                type="submit"
-                disabled={!newMessage.trim()}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all disabled:opacity-50"
+          <div className="p-3 border-b border-white/5 flex items-center justify-between bg-white/5">
+            <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
+              <button
+                type="button"
+                id="tab-live-chat"
+                onClick={() => setActiveSidebarTab('chat')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  activeSidebarTab === 'chat'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-gray-400 hover:text-white'
+                }`}
               >
-                <Send size={18} />
+                <MessageSquare size={13} />
+                <span>Chat</span>
+              </button>
+              <button
+                type="button"
+                id="tab-live-participants"
+                onClick={() => setActiveSidebarTab('participants')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  activeSidebarTab === 'participants'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Users size={13} />
+                <span>People</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${
+                  activeSidebarTab === 'participants' ? 'bg-white/20 text-white' : 'bg-white/10 text-emerald-400'
+                }`}>
+                  {liveUsers.length}/{allRoomUsers.length}
+                </span>
               </button>
             </div>
-          </form>
+
+            <div className="flex items-center gap-1.5 bg-emerald-500/10 px-2 py-1 rounded-full border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wider">
+                {liveUsers.length} Live
+              </span>
+            </div>
+          </div>
+
+          {activeSidebarTab === 'chat' ? (
+            <>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+                <div className="flex flex-wrap gap-2 mb-4">
+                  <AnimatePresence>
+                    {allRoomUsers.map((u) => {
+                      const isLive = isUserLive(u, presenceTick);
+                      return (
+                        <motion.button
+                          key={u.id}
+                          initial={{ scale: 0, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0, opacity: 0 }}
+                          onClick={() => setSelectedUser(u)}
+                          title={`${u.username} (${isLive ? 'LIVE' : `OFFLINE - ${formatLastSeen(u.lastSeen, presenceTick)}`})`}
+                          className={`relative w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 transition-all ${
+                            u.speaking || speakingUsers[u.uid || u.username] 
+                              ? 'border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)] scale-110' 
+                              : isLive 
+                                ? 'border-emerald-500/40' 
+                                : 'border-white/10 opacity-50 grayscale'
+                          } ${u.isHost ? 'bg-emerald-500 text-white' : 'bg-white/10 text-gray-300'}`}
+                        >
+                          {u.username[0].toUpperCase()}
+                          <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0f0f0f] ${
+                            isLive ? 'bg-emerald-500' : 'bg-gray-500'
+                          }`} />
+                          {(u.speaking || speakingUsers[u.uid || u.username]) && isLive && (
+                            <motion.div
+                              layoutId={`glow-${u.id}`}
+                              className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping"
+                            />
+                          )}
+                        </motion.button>
+                      );
+                    })}
+                  </AnimatePresence>
+                </div>
+
+                {messages.map((msg) => (
+                  <div key={msg.id} className="flex flex-col gap-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className={`text-xs font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
+                        {msg.username}
+                      </span>
+                      <span className="text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <p className="text-sm text-gray-200 bg-white/5 p-2.5 rounded-xl rounded-tl-none border border-white/5">
+                      {msg.text}
+                    </p>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+
+              <form onSubmit={sendMessage} className="p-4 border-t border-white/5 bg-white/5">
+                <AnimatePresence>
+                  {Object.keys(typingUsers).length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="text-[10px] text-emerald-500 font-bold mb-2 flex items-center gap-2"
+                    >
+                      <div className="flex gap-1">
+                        <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" />
+                        <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.2s]" />
+                        <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce [animation-delay:0.4s]" />
+                      </div>
+                      {Object.values(typingUsers).join(', ')} {Object.keys(typingUsers).length > 1 ? 'are' : 'is'} typing...
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <div className="relative">
+                  <input 
+                    id="watchparty-chat-input"
+                    type="text" 
+                    value={newMessage}
+                    onChange={(e) => {
+                      setNewMessage(e.target.value);
+                      handleTyping();
+                    }}
+                    placeholder="Say something..."
+                    className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-4 pr-12 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                  />
+                  <button 
+                    id="watchparty-send-btn"
+                    type="submit"
+                    disabled={!newMessage.trim()}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all disabled:opacity-50"
+                    aria-label="Send message"
+                  >
+                    <Send size={18} />
+                  </button>
+                </div>
+              </form>
+            </>
+          ) : (
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+              {/* Presence Overview Pill */}
+              <div className="p-3 bg-white/5 rounded-2xl border border-white/5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black text-white">Party Presence</p>
+                  <p className="text-[10px] text-gray-500">{allRoomUsers.length} total participants</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {liveUsers.length} LIVE
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 text-[10px] font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+                    {offlineUsers.length} OFFLINE
+                  </span>
+                </div>
+              </div>
+
+              {/* LIVE Participants Section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Watching Now ({liveUsers.length})
+                  </span>
+                </div>
+
+                {liveUsers.length === 0 ? (
+                  <div className="p-4 bg-white/5 rounded-2xl border border-white/5 text-center text-xs text-gray-500">
+                    No active viewers detected.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {liveUsers.map((u) => {
+                      const isMe = (user?.uid && u.uid === user.uid) || u.id === effectiveUserId;
+                      return (
+                        <div
+                          key={u.id}
+                          onClick={() => setSelectedUser(u)}
+                          className="group p-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-emerald-500/20 hover:border-emerald-500/40 transition-all cursor-pointer flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs ${
+                                u.isHost ? 'bg-emerald-500 text-white' : 'bg-white/10 text-gray-200'
+                              } ${u.speaking ? 'ring-2 ring-emerald-500 animate-pulse' : ''}`}>
+                                {u.username[0].toUpperCase()}
+                              </div>
+                              <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#0f0f0f]" />
+                            </div>
+                            <div className="text-left">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
+                                  {u.username}
+                                </span>
+                                {isMe && (
+                                  <span className="text-[9px] text-gray-500 font-bold">(You)</span>
+                                )}
+                                {u.isHost && (
+                                  <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-[9px] font-black uppercase">
+                                    Host
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-emerald-400 font-medium">
+                                {u.speaking ? 'Speaking now...' : u.mutedByHost ? 'Muted by Host' : 'Watching in sync'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-gray-400 group-hover:text-white transition-colors">
+                            {u.mutedByHost ? (
+                              <span className="p-1 rounded-md bg-amber-500/10 text-amber-400" title="Muted by host">
+                                <VolumeX size={13} />
+                              </span>
+                            ) : null}
+                            <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              LIVE
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* OFFLINE Participants Section */}
+              {offlineUsers.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+                      Disconnected / Offline ({offlineUsers.length})
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {offlineUsers.map((u) => {
+                      const isMe = (user?.uid && u.uid === user.uid) || u.id === effectiveUserId;
+                      return (
+                        <div
+                          key={u.id}
+                          onClick={() => setSelectedUser(u)}
+                          className="group p-3 bg-white/[0.02] hover:bg-white/5 rounded-2xl border border-white/5 hover:border-white/10 transition-all cursor-pointer flex items-center justify-between opacity-75 hover:opacity-100"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs bg-white/5 text-gray-400 grayscale">
+                                {u.username[0].toUpperCase()}
+                              </div>
+                              <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-gray-500 border-2 border-[#0f0f0f]" />
+                            </div>
+                            <div className="text-left">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-bold text-gray-400 group-hover:text-white transition-colors">
+                                  {u.username}
+                                </span>
+                                {isMe && (
+                                  <span className="text-[9px] text-gray-600 font-bold">(You)</span>
+                                )}
+                                {u.isHost && (
+                                  <span className="px-1.5 py-0.2 rounded bg-white/10 text-gray-400 text-[9px] font-bold uppercase">
+                                    Host
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-gray-500">
+                                Disconnected • {formatLastSeen(u.lastSeen, presenceTick)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/5 text-gray-500 border border-white/5">
+                              Offline
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {isHost && (
+                <div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/10 text-center">
+                  <p className="text-[11px] text-emerald-400/80 leading-relaxed">
+                    Tip: Click any participant to view profile, add friend, or use host moderation.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </main>
 
@@ -2311,43 +2727,58 @@ export const WatchParty = () => {
         </AnimatePresence>
       </div>
 
-      {/* User Avatar Popup */}
+      {/* Social Participant Card & Host Moderation Modal */}
       <AnimatePresence>
         {selectedUser && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSelectedUser(null)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-[#1a1a1a] border border-white/10 rounded-[32px] p-8 w-full max-w-xs text-center space-y-4 shadow-2xl"
-            >
-              <div className={`w-20 h-20 mx-auto rounded-3xl flex items-center justify-center text-3xl font-black ${selectedUser.isHost ? 'bg-emerald-500 text-white' : 'bg-white/10 text-gray-400'}`}>
-                {selectedUser.username[0].toUpperCase()}
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-white">{selectedUser.username}</h3>
-                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mt-1">
-                  {selectedUser.isHost ? 'Room Host' : 'Participant'}
-                </p>
-              </div>
-              <div className="pt-4 flex flex-col gap-2">
-                <p className="text-[10px] text-gray-600 uppercase tracking-widest font-black">Joined {new Date(selectedUser.joinedAt).toLocaleTimeString()}</p>
-                <button 
-                  onClick={() => setSelectedUser(null)}
-                  className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-bold transition-all"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
+          <SocialParticipantModal
+            user={selectedUser}
+            currentUser={userData}
+            currentUserId={effectiveUserId}
+            isCurrentUserHost={isHost}
+            roomId={cleanRoomId}
+            isFriend={Boolean(userData?.friends?.includes(selectedUser.uid || ''))}
+            onAddFriend={async (target) => {
+              if (!user?.uid || !target.uid) {
+                showToast("Sign in to add friends");
+                return;
+              }
+              try {
+                await updateDoc(doc(db, 'users', user.uid), {
+                  friends: arrayUnion(target.uid)
+                });
+                showToast(`Added ${target.username} as friend!`);
+              } catch {
+                showToast("Failed to add friend");
+              }
+            }}
+            onRemoveFriend={async (targetUid) => {
+              if (!user?.uid) return;
+              try {
+                const { arrayRemove } = await import('firebase/firestore');
+                await updateDoc(doc(db, 'users', user.uid), {
+                  friends: arrayRemove(targetUid)
+                });
+                showToast("Removed from friends");
+              } catch {
+                showToast("Failed to remove friend");
+              }
+            }}
+            onMentionUser={(name) => {
+              setNewMessage(prev => `@${name} ` + prev);
+              const input = document.getElementById('watchparty-chat-input');
+              if (input) input.focus();
+            }}
+            onKickUser={async (targetDocId) => {
+              try {
+                await deleteDoc(doc(db, `watchRooms/${cleanRoomId}/users`, targetDocId));
+                showToast("Participant removed from room");
+              } catch {
+                showToast("Failed to remove participant");
+              }
+            }}
+            onClose={() => setSelectedUser(null)}
+            onToast={showToast}
+          />
         )}
       </AnimatePresence>
 
@@ -2479,14 +2910,14 @@ export const WatchParty = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="relative w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-[32px] p-8 shadow-2xl text-center space-y-6"
+              className="relative w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-3xl sm:rounded-[32px] p-6 sm:p-8 shadow-2xl text-center space-y-6"
             >
-              <div className="w-20 h-20 bg-amber-500/15 text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
-                <LogOut size={36} />
+              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-amber-500/15 text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
+                <LogOut className="w-7 h-7 sm:w-9 sm:h-9" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-2xl font-black text-white">Leave Watch Party?</h3>
-                <p className="text-gray-400 text-sm leading-relaxed">
+                <h3 className="text-xl sm:text-2xl font-black text-white">Leave Watch Party?</h3>
+                <p className="text-gray-400 text-xs sm:text-sm leading-relaxed">
                   Leaving exits your current viewing session. Your room and its stream settings remain saved under <span className="text-emerald-400 font-bold">My Watch Parties</span> on your Home page so you can return anytime.
                 </p>
               </div>
@@ -2495,14 +2926,20 @@ export const WatchParty = () => {
                   id="leave-room-temporarily-btn"
                   onClick={() => confirmLeaveRoom(false)}
                   disabled={isLeavingRoom}
-                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-2xl transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2 text-sm"
+                  className="group relative w-full py-3.5 sm:py-4 px-4 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-50 text-white font-bold rounded-2xl transition-all shadow-lg shadow-emerald-900/25 flex items-center justify-center gap-2.5 sm:gap-3 text-xs sm:text-sm text-center"
                 >
                   {isLeavingRoom ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
                   ) : (
-                    <>
-                      <LogOut size={16} /> Leave Room Temporarily (Keep Room Saved)
-                    </>
+                    <div className="flex items-center justify-center gap-2.5 sm:gap-3 w-full">
+                      <LogOut className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-white transition-transform duration-200 group-hover:-translate-x-0.5" />
+                      <div className="flex flex-col sm:flex-row items-center sm:gap-1.5 leading-tight">
+                        <span>Leave Room Temporarily</span>
+                        <span className="text-[11px] sm:text-xs text-emerald-100/80 font-normal">
+                          (Keep Room Saved)
+                        </span>
+                      </div>
+                    </div>
                   )}
                 </button>
                 <button 

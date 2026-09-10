@@ -37,12 +37,19 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return data.keys().hasOnly(['username', 'email', 'role', 'favorites', 'history', 'friends', 'createdAt', 'uid', 'photoURL']) &&
+      return data.keys().hasOnly(['username', 'email', 'role', 'favorites', 'history', 'friends', 'createdAt', 'uid', 'photoURL', 'bio', 'customStatus', 'totalWatchSeconds', 'badges', 'status', 'lastSeen', 'avatarUrl']) &&
              data.username is string && data.username.size() > 0 && data.username.size() < 100 &&
              data.email is string && data.role in ['user', 'admin'] &&
              (!('friends' in data) || data.friends is list) &&
              (!('favorites' in data) || data.favorites is list) &&
-             (!('history' in data) || data.history is list);
+             (!('history' in data) || data.history is list) &&
+             (!('bio' in data) || data.bio is string) &&
+             (!('customStatus' in data) || data.customStatus is string) &&
+             (!('totalWatchSeconds' in data) || data.totalWatchSeconds is number) &&
+             (!('badges' in data) || data.badges is list) &&
+             (!('status' in data) || data.status in ['online', 'offline', 'watching', 'away']) &&
+             (!('lastSeen' in data) || data.lastSeen is string || data.lastSeen is timestamp) &&
+             (!('avatarUrl' in data) || data.avatarUrl is string);
     }
 
     function isValidMovie(data) {
@@ -116,14 +123,26 @@ service cloud.firestore {
              data.username is string && data.username.size() > 0 && data.username.size() <= 100 &&
              data.isHost is bool &&
              (!('uid' in data) || data.uid == null || data.uid is string) &&
-             (!('speaking' in data) || data.speaking is bool);
+             (!('speaking' in data) || data.speaking is bool) &&
+             (!('mutedByHost' in data) || data.mutedByHost is bool) &&
+             (!('micActive' in data) || data.micActive is bool) &&
+             (!('avatarUrl' in data) || data.avatarUrl is string) &&
+             (!('lastSeen' in data) || data.lastSeen is number || data.lastSeen is timestamp || data.lastSeen is string) &&
+             (!('connectionStatus' in data) || data.connectionStatus in ['online', 'offline']) &&
+             (!('status' in data) || data.status in ['watching', 'away', 'idle', 'online', 'offline']);
     }
 
     function isValidWatchRoomUserUpdate(data) {
       return (!('username' in data) || (data.username is string && data.username.size() > 0 && data.username.size() <= 100)) &&
              (!('isHost' in data) || data.isHost is bool) &&
              (!('uid' in data) || data.uid == null || data.uid is string) &&
-             (!('speaking' in data) || data.speaking is bool);
+             (!('speaking' in data) || data.speaking is bool) &&
+             (!('mutedByHost' in data) || data.mutedByHost is bool) &&
+             (!('micActive' in data) || data.micActive is bool) &&
+             (!('avatarUrl' in data) || data.avatarUrl is string) &&
+             (!('lastSeen' in data) || data.lastSeen is number || data.lastSeen is timestamp || data.lastSeen is string) &&
+             (!('connectionStatus' in data) || data.connectionStatus in ['online', 'offline']) &&
+             (!('status' in data) || data.status in ['watching', 'away', 'idle', 'online', 'offline']);
     }
 
     function isValidWatchRoomReaction(data) {
@@ -345,7 +364,18 @@ service cloud.firestore {
       match /users/{userId} {
         allow read: if canAccessWatchRoom(roomId);
         allow create: if canAccessWatchRoom(roomId) && ((isAuthenticated() && request.auth.uid == userId && isValidWatchRoomUser(request.resource.data)) || (request.auth == null && isValidWatchRoomUser(request.resource.data)));
-        allow update: if canAccessWatchRoom(roomId) && ((isAuthenticated() && request.auth.uid == userId && isValidWatchRoomUserUpdate(request.resource.data)) || (request.auth == null && isValidWatchRoomUserUpdate(request.resource.data)));
+        allow update: if canAccessWatchRoom(roomId) && (
+          (isAuthenticated() && request.auth.uid == userId && isValidWatchRoomUserUpdate(request.resource.data)) ||
+          (
+            isAuthenticated() && (
+              request.auth.uid == get(/databases/$(database)/documents/watchRooms/$(roomId)).data.hostId ||
+              (('ownerId' in get(/databases/$(database)/documents/watchRooms/$(roomId)).data) && request.auth.uid == get(/databases/$(database)/documents/watchRooms/$(roomId)).data.ownerId)
+            ) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mutedByHost', 'connectionStatus', 'status', 'lastSeen']) &&
+            isValidWatchRoomUserUpdate(request.resource.data)
+          ) ||
+          (request.auth == null && isValidWatchRoomUserUpdate(request.resource.data))
+        );
         allow delete: if canAccessWatchRoom(roomId) && (
           (isAuthenticated() && (
             request.auth.uid == userId || 

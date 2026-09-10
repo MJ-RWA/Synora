@@ -8,22 +8,24 @@ export const FloatingSupport = () => {
 
   return (
     <motion.button
+      id="floating-support-btn"
       onClick={() => navigate('/support')}
       initial={{ scale: 1 }}
       animate={{ 
-        scale: [1, 1.1, 1],
+        scale: [1, 1.06, 1],
       }}
       transition={{ 
-        duration: 2, 
+        duration: 2.5, 
         repeat: Infinity,
         ease: "easeInOut"
       }}
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
-      className="fixed bottom-5 right-5 z-[9999] bg-[#ff813f] text-white px-4 py-3 md:px-5 md:py-3.5 rounded-full font-bold shadow-2xl flex items-center gap-2 transition-transform"
+      aria-label="Support Synora"
+      className="fixed bottom-5 left-3 sm:left-6 z-40 bg-[#ff813f] hover:bg-[#ff7125] text-white px-3.5 py-2.5 sm:px-5 sm:py-3.5 rounded-full font-bold shadow-2xl flex items-center gap-2 transition-all select-none border border-white/10"
     >
-      <Coffee size={20} className="md:w-6 md:h-6" />
-      <span className="text-sm md:text-base">Support</span>
+      <Coffee size={18} className="sm:w-5 sm:h-5 shrink-0" />
+      <span className="text-xs sm:text-sm font-black tracking-wide">Support</span>
     </motion.button>
   );
 };

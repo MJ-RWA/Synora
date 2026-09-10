@@ -1,8 +1,26 @@
+export interface AchievementBadge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tier: 'bronze' | 'silver' | 'gold' | 'diamond';
+  unlockedAt?: string;
+}
+
 export interface User {
   uid: string;
   username: string;
   email: string;
   role: 'user' | 'admin';
+  bio?: string;
+  status?: 'online' | 'away' | 'watching' | 'offline';
+  customStatus?: string;
+  avatarUrl?: string;
+  totalWatchSeconds?: number;
+  partiesJoined?: number;
+  partiesHosted?: number;
+  badges?: string[]; // Array of badge IDs
+  blockedUsers?: string[]; // Array of blocked UIDs
   favorites?: string[];
   history?: string[];
   friends?: string[]; // Array of friend UIDs
@@ -64,6 +82,14 @@ export interface WatchRoomUser {
   joinedAt: string;
   speaking?: boolean;
   uid?: string | null;
+  mutedByHost?: boolean;
+  micActive?: boolean;
+  watchTimeSeconds?: number;
+  status?: 'watching' | 'away' | 'idle' | 'online' | 'offline';
+  avatarUrl?: string;
+  customStatus?: string;
+  lastSeen?: number | string;
+  connectionStatus?: 'online' | 'offline';
 }
 
 export interface WatchRoomReaction {

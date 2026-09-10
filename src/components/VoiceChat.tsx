@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { collection, addDoc, onSnapshot, query, where, deleteDoc, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Mic, MicOff, Phone, PhoneOff, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, AlertCircle, ShieldAlert } from 'lucide-react';
 import { WatchRoomVoiceSignal } from '../types';
 
 export interface VoiceChatProps {
@@ -9,6 +9,7 @@ export interface VoiceChatProps {
   userId: string;
   username: string;
   muted?: boolean;
+  mutedByHost?: boolean;
   onMuteChange?: (muted: boolean) => void;
   onMuteToggle?: (muted: boolean) => void;
   onSpeaking?: (userId: string) => void;
@@ -45,6 +46,7 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
   userId, 
   username, 
   muted = false, 
+  mutedByHost = false,
   onMuteChange,
   onMuteToggle,
   onSpeaking, 
@@ -54,14 +56,22 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
   const [isJoined, setIsJoined] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [activePeers, setActivePeers] = useState<string[]>([]);
-  const [micActive, setMicActive] = useState(!muted);
+  const [micActive, setMicActive] = useState(!muted && !mutedByHost);
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const pendingCandidates = useRef<{ [peerId: string]: RTCIceCandidateInit[] }>({});
   const remoteAudiosRef = useRef<{ [peerId: string]: HTMLAudioElement }>({});
+  const remoteAudioNodesRef = useRef<{
+    [peerId: string]: {
+      source: MediaStreamAudioSourceNode;
+      gain: GainNode;
+      compressor: DynamicsCompressorNode;
+    };
+  }>({});
   const audioContainerRef = useRef<HTMLDivElement | null>(null);
+  const prevHostMutedRef = useRef<boolean>(mutedByHost);
   const unsubscribeSignalsRef = useRef<(() => void) | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -69,6 +79,23 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
 
   const cleanRoomId = roomId ? decodeURIComponent(roomId).trim() : '';
   const myId = userId || username;
+
+  const ensureAudioContext = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return null;
+      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+        audioContextRef.current = new AudioCtx();
+      }
+      if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+      return audioContextRef.current;
+    } catch (e) {
+      console.warn("AudioContext setup warning:", e);
+      return null;
+    }
+  }, []);
 
   const cleanup = useCallback(() => {
     speakingDetectionActiveRef.current = false;
@@ -92,6 +119,18 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
     });
     peerConnections.current = {};
     pendingCandidates.current = {};
+
+    // Disconnect and clean up remote Web Audio nodes
+    Object.values(remoteAudioNodesRef.current).forEach(({ source, gain, compressor }) => {
+      try {
+        source.disconnect();
+        gain.disconnect();
+        compressor.disconnect();
+      } catch {
+        // ignore
+      }
+    });
+    remoteAudioNodesRef.current = {};
 
     Object.values(remoteAudiosRef.current).forEach(audio => {
       try {
@@ -171,6 +210,17 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
         setActivePeers(prev => [...new Set([...prev, targetUserId])]);
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         setActivePeers(prev => prev.filter(id => id !== targetUserId));
+        if (remoteAudioNodesRef.current[targetUserId]) {
+          try {
+            const { source, gain, compressor } = remoteAudioNodesRef.current[targetUserId];
+            source.disconnect();
+            gain.disconnect();
+            compressor.disconnect();
+          } catch {
+            // ignore
+          }
+          delete remoteAudioNodesRef.current[targetUserId];
+        }
         if (remoteAudiosRef.current[targetUserId]) {
           try {
             remoteAudiosRef.current[targetUserId].pause();
@@ -188,12 +238,58 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
       if (!event.streams || event.streams.length === 0) return;
       const remoteStream = event.streams[0];
 
+      let usingWebAudio = false;
+      const audioCtx = ensureAudioContext();
+      if (audioCtx) {
+        try {
+          if (remoteAudioNodesRef.current[targetUserId]) {
+            try {
+              const old = remoteAudioNodesRef.current[targetUserId];
+              old.source.disconnect();
+              old.gain.disconnect();
+              old.compressor.disconnect();
+            } catch {
+              // ignore
+            }
+          }
+
+          const source = audioCtx.createMediaStreamSource(remoteStream);
+          const gainNode = audioCtx.createGain();
+
+          // Apply clean vocal gain boost (+5.1 dB) so conversational speech is clearly audible while video is playing
+          gainNode.gain.setValueAtTime(1.8, audioCtx.currentTime);
+
+          // Dynamics compressor prevents distortion, ear fatigue, or clipping if someone laughs or speaks loudly
+          const compressor = audioCtx.createDynamicsCompressor();
+          compressor.threshold.setValueAtTime(-24, audioCtx.currentTime);
+          compressor.knee.setValueAtTime(10, audioCtx.currentTime);
+          compressor.ratio.setValueAtTime(3.5, audioCtx.currentTime);
+          compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+          compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+
+          source.connect(gainNode);
+          gainNode.connect(compressor);
+          compressor.connect(audioCtx.destination);
+
+          remoteAudioNodesRef.current[targetUserId] = {
+            source,
+            gain: gainNode,
+            compressor,
+          };
+          usingWebAudio = true;
+        } catch (audioCtxErr) {
+          console.warn("Web Audio pipeline setup for remote stream failed, falling back to direct audio tag:", audioCtxErr);
+        }
+      }
+
       if (!remoteAudiosRef.current[targetUserId]) {
         const audio = document.createElement('audio');
         audio.autoplay = true;
         audio.setAttribute('playsinline', 'true');
         audio.srcObject = remoteStream;
-        audio.volume = 1.0;
+        // When Web Audio pipeline is active, set audio element volume to 0 to keep WebRTC decoding active without duplicate sound
+        // If Web Audio failed, fallback to volume 1.0 for reliable playback
+        audio.volume = usingWebAudio ? 0 : 1.0;
         
         if (audioContainerRef.current) {
           audioContainerRef.current.appendChild(audio);
@@ -210,6 +306,7 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
       } else {
         const existingAudio = remoteAudiosRef.current[targetUserId];
         existingAudio.srcObject = remoteStream;
+        existingAudio.volume = usingWebAudio ? 0 : 1.0;
         existingAudio.play().catch(() => {});
       }
     };
@@ -222,19 +319,13 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
     }
 
     return pc;
-  }, [cleanRoomId, myId]);
+  }, [cleanRoomId, myId, ensureAudioContext]);
 
   // Speaking Detection
   const startSpeakingDetection = (stream: MediaStream) => {
     try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtx) return;
-
-      const audioCtx = new AudioCtx();
-      audioContextRef.current = audioCtx;
-      if (audioCtx.state === 'suspended') {
-        audioCtx.resume().catch(() => {});
-      }
+      const audioCtx = ensureAudioContext();
+      if (!audioCtx) return;
 
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
@@ -287,6 +378,24 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
     }
   };
 
+  // Resume AudioContext on any user interaction while in voice chat
+  useEffect(() => {
+    if (!isJoined) return;
+    const resumeAudio = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeAudio);
+    window.addEventListener('keydown', resumeAudio);
+    window.addEventListener('touchstart', resumeAudio);
+    return () => {
+      window.removeEventListener('click', resumeAudio);
+      window.removeEventListener('keydown', resumeAudio);
+      window.removeEventListener('touchstart', resumeAudio);
+    };
+  }, [isJoined]);
+
   const startVoiceChat = async () => {
     if (isConnecting || isJoined) return;
     setIsConnecting(true);
@@ -297,8 +406,24 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
         throw new Error("Voice chat requires a secure connection (HTTPS or localhost) and microphone support.");
       }
 
+      // Initialize or resume AudioContext within user click gesture
+      ensureAudioContext();
+
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      };
+
       let stream: MediaStream;
       try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+          video: false,
+        });
+      } catch (advancedErr) {
+        console.warn("Advanced audio constraints failed, trying standard audio constraints:", advancedErr);
         stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
@@ -307,16 +432,19 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
           },
           video: false,
         });
-      } catch (advancedErr) {
-        console.warn("Advanced audio constraints failed, trying basic audio constraints:", advancedErr);
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: false,
-        });
+      }
+
+      // Explicitly enforce track constraints to ensure browser driver enables AGC, AEC, and NS
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack && audioTrack.applyConstraints) {
+        audioTrack.applyConstraints({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }).catch(() => {});
       }
 
       localStreamRef.current = stream;
-      const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !muted;
         setMicActive(audioTrack.enabled);
@@ -362,6 +490,17 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
                   // ignore
                 }
                 delete peerConnections.current[fromPeerId];
+              }
+              if (remoteAudioNodesRef.current[fromPeerId]) {
+                try {
+                  const { source, gain, compressor } = remoteAudioNodesRef.current[fromPeerId];
+                  source.disconnect();
+                  gain.disconnect();
+                  compressor.disconnect();
+                } catch {
+                  // ignore
+                }
+                delete remoteAudioNodesRef.current[fromPeerId];
               }
               if (remoteAudiosRef.current[fromPeerId]) {
                 try {
@@ -514,18 +653,35 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
     }
   };
 
-  // Sync external `muted` prop with local audio track
+  // Sync external `muted` and `mutedByHost` props with local audio track
   useEffect(() => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
-        audioTrack.enabled = !muted;
-        setMicActive(audioTrack.enabled);
+        const shouldBeActive = !muted && !mutedByHost;
+        audioTrack.enabled = shouldBeActive;
+        setMicActive(shouldBeActive);
       }
     }
-  }, [muted]);
+
+    // Check host mute transitions
+    if (prevHostMutedRef.current !== mutedByHost) {
+      if (mutedByHost) {
+        onToast?.("You were muted by the room host.");
+        onMuteChange?.(true);
+        onMuteToggle?.(true);
+      } else if (prevHostMutedRef.current) {
+        onToast?.("Host removed mute restriction. You can now turn your microphone back on.");
+      }
+      prevHostMutedRef.current = mutedByHost;
+    }
+  }, [muted, mutedByHost, onToast, onMuteChange, onMuteToggle]);
 
   const toggleMic = () => {
+    if (mutedByHost) {
+      onToast?.("You have been muted by the room host.");
+      return;
+    }
     if (!localStreamRef.current) return;
     const audioTrack = localStreamRef.current.getAudioTracks()[0];
     if (audioTrack) {
@@ -536,6 +692,13 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
       onMuteChange?.(isMuted);
       onMuteToggle?.(isMuted);
       onToast?.(nextState ? "Microphone unmuted" : "Microphone muted");
+
+      if (cleanRoomId && myId) {
+        updateDoc(doc(db, `watchRooms/${cleanRoomId}/users`, myId), {
+          micActive: nextState,
+          isMuted,
+        }).catch(() => {});
+      }
     }
   };
 
@@ -556,7 +719,7 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
 
   return (
     <div className={`flex items-center gap-2 sm:gap-3 bg-white/5 rounded-2xl border border-white/5 ${compact ? 'p-1.5' : 'p-2 sm:p-3'}`}>
-      <div ref={audioContainerRef} className="hidden" aria-hidden="true" />
+      <div ref={audioContainerRef} className="fixed -top-96 -left-96 w-1 h-1 opacity-0 pointer-events-none overflow-hidden" aria-hidden="true" />
       
       {!compact && (
         <div className="hidden sm:flex flex-col">
@@ -585,13 +748,25 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
         ) : (
           <>
             <button 
+              id="voicechat-mic-btn"
               onClick={toggleMic}
+              disabled={mutedByHost}
               className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl transition-all font-bold ${
-                micActive ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                mutedByHost 
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 cursor-not-allowed opacity-90'
+                  : micActive 
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                  : 'bg-red-500/20 text-red-400 border border-red-500/30'
               }`}
-              title={micActive ? 'Mute Microphone' : 'Unmute Microphone'}
+              title={
+                mutedByHost 
+                  ? 'Muted by Room Host (Cannot unmute until host unlocks)' 
+                  : micActive 
+                  ? 'Mute Microphone' 
+                  : 'Unmute Microphone'
+              }
             >
-              {micActive ? <Mic size={17} /> : <MicOff size={17} />}
+              {mutedByHost ? <ShieldAlert size={17} /> : micActive ? <Mic size={17} /> : <MicOff size={17} />}
             </button>
             <button 
               onClick={leaveVoiceChat}

@@ -1,8 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { collection, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { SAMPLE_MEDIA, SampleMedia } from '../config/sampleMedia';
-import { X, Film, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2, Check } from 'lucide-react';
+import { X, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2, Check } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
@@ -12,8 +11,7 @@ interface WatchPartyModalProps {
   onClose: () => void;
   defaultVideoUrl?: string;
   defaultTitle?: string;
-  defaultSample?: SampleMedia | null;
-  defaultTab?: 'sample' | 'custom' | 'embed' | 'screen' | 'netflix';
+  defaultTab?: 'embed' | 'custom' | 'screen' | 'netflix';
 }
 
 export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({ 
@@ -21,36 +19,29 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
   onClose,
   defaultVideoUrl = '',
   defaultTitle = '',
-  defaultSample = null,
   defaultTab
 }) => {
   const navigate = useNavigate();
   const { user, loading: authLoading, loginWithGoogle } = useAuth();
   const extensionBridge = useExtensionBridge();
-  const [activeTab, setActiveTab] = useState<'sample' | 'custom' | 'embed' | 'screen' | 'netflix'>(defaultTab || 'sample');
+  const [activeTab, setActiveTab] = useState<'embed' | 'custom' | 'screen' | 'netflix'>(defaultTab || 'embed');
   const [username, setUsername] = useState(user?.displayName || '');
   const [roomTitle, setRoomTitle] = useState(defaultTitle || '');
   const [customUrl, setCustomUrl] = useState(defaultVideoUrl || '');
   const [netflixUrl, setNetflixUrl] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [subtitleUrl, setSubtitleUrl] = useState('');
-  const [selectedSample, setSelectedSample] = useState<SampleMedia | null>(defaultSample || SAMPLE_MEDIA[0]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const isSubmittingRef = useRef(false);
 
-  // Sync props when opened or selected sample changes
+  // Sync props when opened or selected settings change
   React.useEffect(() => {
     if (isOpen) {
       if (defaultTab) {
         setActiveTab(defaultTab);
       }
-      if (defaultSample) {
-        setSelectedSample(defaultSample);
-        setRoomTitle(defaultSample.title);
-        setCustomUrl(defaultSample.videoUrl);
-        if (!defaultTab) setActiveTab('sample');
-      } else if (defaultVideoUrl) {
+      if (defaultVideoUrl) {
         if (defaultVideoUrl.includes('netflix.com')) {
           setNetflixUrl(defaultVideoUrl);
           if (!defaultTab) setActiveTab('netflix');
@@ -69,7 +60,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         setRoomTitle(prev => prev || (netflixContent.title ? `Netflix: ${netflixContent.title}` : ''));
       }
     }
-  }, [isOpen, defaultSample, defaultVideoUrl, defaultTitle, defaultTab, user, extensionBridge.netflixState]);
+  }, [isOpen, defaultVideoUrl, defaultTitle, defaultTab, user, extensionBridge.netflixState]);
 
   if (!isOpen) return null;
 
@@ -83,7 +74,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
     }
   };
 
-  const handleCreateRoom = async (sourceType: 'sample' | 'custom' | 'embed' | 'screen' | 'netflix', sampleItem?: SampleMedia) => {
+  const handleCreateRoom = async (sourceType: 'embed' | 'custom' | 'screen' | 'netflix') => {
     // 1. Prevent double submission synchronously
     if (creating || isSubmittingRef.current) return;
 
@@ -129,12 +120,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       let subtitle = subtitleUrl.trim();
       let netflixPlayback = null;
 
-      if (sourceType === 'sample') {
-        const media = sampleItem || selectedSample || SAMPLE_MEDIA[0];
-        videoUrl = media.videoUrl;
-        if (!finalTitle) finalTitle = media.title;
-        if (media.subtitle) subtitle = media.subtitle;
-      } else if (sourceType === 'custom') {
+      if (sourceType === 'custom') {
         if (!customUrl.trim()) {
           setError('Please provide a direct video URL (.mp4, .m3u8, etc.)');
           setCreating(false);
@@ -393,31 +379,18 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
           {/* Source Tabs */}
           <div className="space-y-3">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Choose Content Source</label>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
               <button 
                 type="button"
-                onClick={() => setActiveTab('sample')}
+                onClick={() => setActiveTab('embed')}
                 disabled={creating}
                 className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'sample' 
+                  activeTab === 'embed' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <Film size={15} /> Samples
-              </button>
-
-              <button 
-                type="button"
-                onClick={() => setActiveTab('netflix')}
-                disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'netflix' 
-                    ? 'bg-red-600 text-white shadow-md' 
-                    : 'text-gray-400 hover:text-white'
-                } disabled:opacity-50`}
-              >
-                <Tv size={15} className="text-white" /> Netflix
+                <Youtube size={15} /> YouTube
               </button>
 
               <button 
@@ -435,15 +408,15 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
 
               <button 
                 type="button"
-                onClick={() => setActiveTab('embed')}
+                onClick={() => setActiveTab('netflix')}
                 disabled={creating}
                 className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'embed' 
-                    ? 'bg-emerald-600 text-white shadow-md' 
+                  activeTab === 'netflix' 
+                    ? 'bg-red-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <Youtube size={15} /> YouTube
+                <Tv size={15} className="text-white" /> Netflix
               </button>
 
               <button 
@@ -524,50 +497,6 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
                 <p className="text-[11px] text-gray-400">
                   Open Netflix in another tab or paste your Netflix watch URL. When you play, pause, or seek, all participants stay in lockstep.
                 </p>
-              </div>
-            </div>
-          )}
-
-          {/* Source Panels */}
-          {activeTab === 'sample' && (
-            <div className="space-y-3">
-              <p className="text-xs text-gray-400">Pick any free open-source media to start an instant synchronized session:</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
-                {SAMPLE_MEDIA.map((item) => {
-                  const isSelected = selectedSample?.id === item.id;
-                  return (
-                    <div 
-                      key={item.id}
-                      onClick={() => {
-                        if (!creating) {
-                          setSelectedSample(item);
-                          setRoomTitle(item.title);
-                          setCustomUrl(item.videoUrl);
-                        }
-                      }}
-                      className={`relative flex items-center gap-3 p-3 rounded-2xl border cursor-pointer transition-all ${
-                        isSelected 
-                          ? 'bg-emerald-500/10 border-emerald-500/60 shadow-lg' 
-                          : 'bg-white/5 border-white/5 hover:border-white/20'
-                      } ${creating ? 'pointer-events-none opacity-60' : ''}`}
-                    >
-                      <img 
-                        src={item.poster} 
-                        alt={item.title} 
-                        className="w-14 h-16 object-cover rounded-xl shrink-0" 
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-sm font-bold text-white truncate">{item.title}</h4>
-                          {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
-                        </div>
-                        <p className="text-[11px] text-emerald-400 font-medium">{item.category}</p>
-                        <p className="text-[10px] text-gray-500 truncate">{item.description}</p>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}
