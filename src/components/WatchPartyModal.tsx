@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { collection, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { X, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2, Check } from 'lucide-react';
+import { X, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
@@ -117,7 +117,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       let finalTitle = roomTitle.trim();
       let videoUrl = '';
       let isScreenSharing = false;
-      let subtitle = subtitleUrl.trim();
+      const subtitle = subtitleUrl.trim();
       let netflixPlayback = null;
 
       if (sourceType === 'custom') {

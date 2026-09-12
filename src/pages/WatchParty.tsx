@@ -487,7 +487,11 @@ export const WatchParty = () => {
     // Reactions listener
     const reactionsQuery = query(collection(db, `watchRooms/${cleanRoomId}/reactions`), orderBy('time', 'desc'), limit(10));
     const unsubscribeReactions = onSnapshot(reactionsQuery, (snapshot) => {
-      setReactions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WatchRoomReaction)));
+      const now = Date.now();
+      const recent = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as WatchRoomReaction))
+        .filter(r => !r.time || (now - new Date(r.time).getTime() < 6000));
+      setReactions(recent);
     }, (error) => {
       console.warn("Reactions listener error:", error);
     });
@@ -1179,7 +1183,7 @@ export const WatchParty = () => {
   }, [user, isInviteModalOpen, isChangeMovieModalOpen]);
 
   const handleScreenStream = useCallback(async (stream: MediaStream | null) => {
-    setScreenStream(prev => prev === stream ? prev : stream);
+    setScreenStream(stream);
     if (!cleanRoomId) return;
 
     try {
@@ -1706,8 +1710,8 @@ export const WatchParty = () => {
             <div className="w-16 h-16 bg-emerald-500/20 text-emerald-500 rounded-2xl flex items-center justify-center mx-auto animate-pulse">
               <Users size={32} />
             </div>
-            <h2 className="text-2xl font-black text-white">Joining Watch Party</h2>
-            <p className="text-gray-400 text-sm">Connecting you to <span className="text-white font-bold">{room.title}</span>...</p>
+            <h2 className="text-lg sm:text-xl font-bold text-white">Joining Watch Party</h2>
+            <p className="text-gray-400 text-xs sm:text-sm">Connecting you to <span className="text-white font-semibold">{room.title}</span>...</p>
           </div>
           <form 
             onSubmit={(e) => {
@@ -1823,8 +1827,8 @@ export const WatchParty = () => {
               <ArrowLeft size={20} />
             </Link>
             <div className="flex flex-col">
-              <h1 className="text-sm font-bold text-white truncate max-w-[150px] sm:max-w-[250px] md:max-w-md">{room.title}</h1>
-              <div className="flex items-center gap-2 text-[9px] text-gray-500 uppercase tracking-widest font-black">
+              <h1 className="text-[11px] sm:text-xs font-semibold text-white truncate max-w-[130px] sm:max-w-[220px] md:max-w-md">{room.title}</h1>
+              <div className="flex items-center gap-2 text-[8px] sm:text-[9px] text-gray-500 uppercase tracking-widest font-semibold">
                 <span className="flex items-center gap-1.5 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="text-emerald-400 font-bold">{liveUsers.length} Live</span>
@@ -1947,6 +1951,21 @@ export const WatchParty = () => {
                           });
                         }
                       }}
+                      onLoadedMetadata={(e) => {
+                        const video = e.currentTarget;
+                        video.muted = isHost ? true : isScreenAudioMuted;
+                        video.play().catch(() => {
+                          video.muted = true;
+                          setIsScreenAudioMuted(true);
+                          video.play().catch(() => {});
+                        });
+                      }}
+                      onClick={(e) => {
+                        const video = e.currentTarget;
+                        if (video.paused) {
+                          video.play().catch(() => {});
+                        }
+                      }}
                       autoPlay
                       playsInline
                       muted={isHost ? true : isScreenAudioMuted}
@@ -2005,8 +2024,8 @@ export const WatchParty = () => {
                       <Monitor size={28} />
                     </div>
                     <div>
-                      <h3 className="text-base font-bold text-white">Screen Share Mode Active</h3>
-                      <p className="text-xs text-gray-400 mt-1 max-w-sm">Click "Share Screen" in the bar above to choose your tab, app window, or entire monitor.</p>
+                      <h3 className="text-sm sm:text-base font-bold text-white">Screen Share Mode Active</h3>
+                      <p className="text-xs text-gray-400 mt-1 max-w-sm">Tap "Share Screen" in the bar above to share your mobile screen, app, or camera.</p>
                     </div>
                   </div>
                 ) : (
@@ -2030,14 +2049,6 @@ export const WatchParty = () => {
                               type: 'screen-request',
                               time: new Date().toISOString(),
                             });
-                            if (targetHost !== 'host') {
-                              await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
-                                from: effectiveUserId,
-                                to: 'host',
-                                type: 'screen-request',
-                                time: new Date().toISOString(),
-                              }).catch(() => {});
-                            }
                           } catch (e) {
                             console.warn('Manual retry error:', e);
                           }
@@ -2308,9 +2319,13 @@ export const WatchParty = () => {
                   <motion.div
                     key={reaction.id}
                     initial={{ y: 0, x: getXPos(reaction.id), opacity: 0, scale: 0.6 }}
-                    animate={{ y: '-220px', opacity: [0, 1, 1, 0], scale: [0.6, 1.2, 1.05, 0.85] }}
+                    animate={{ 
+                      y: ['0px', '-60px', '-160px', '-260px'], 
+                      opacity: [0, 1, 1, 0.7, 0], 
+                      scale: [0.6, 1.2, 1.15, 1.0, 0.85] 
+                    }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 1.2, ease: "easeOut" }}
+                    transition={{ duration: 3.5, ease: "easeInOut" }}
                     className="absolute bottom-6 text-2xl sm:text-3xl filter drop-shadow select-none"
                   >
                     {reaction.emoji}
@@ -2359,10 +2374,10 @@ export const WatchParty = () => {
             </button>
           </div>
 
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/5 lg:bg-transparent p-4 lg:p-0 rounded-2xl border border-white/5 lg:border-0">
-            <div className="space-y-1">
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-black text-white">{room.title}</h2>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 bg-white/5 lg:bg-transparent p-3 sm:p-4 lg:p-0 rounded-2xl border border-white/5 lg:border-0">
+            <div className="space-y-0.5 sm:space-y-1">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <h2 className="text-base sm:text-lg font-bold text-white">{room.title}</h2>
                 {isHost && (
                   <button 
                     onClick={() => setIsChangeMovieModalOpen(true)}
@@ -2375,7 +2390,7 @@ export const WatchParty = () => {
                 {!isHost && (
                   <button 
                     onClick={syncWithHost}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all border border-emerald-500/30 shadow-sm"
+                    className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-lg text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all border border-emerald-500/30 shadow-sm"
                     title="Recalculate and Align with Host"
                   >
                     <RefreshCw size={12} className="animate-spin-once" />
@@ -2383,15 +2398,15 @@ export const WatchParty = () => {
                   </button>
                 )}
               </div>
-              <p className="text-gray-500 text-sm">Hosted by <span className="text-emerald-500 font-bold">{room.hostName}</span></p>
+              <p className="text-gray-500 text-xs">Hosted by <span className="text-emerald-500 font-semibold">{room.hostName}</span></p>
             </div>
             
-            <div className="flex items-center gap-2 bg-white/5 p-2 rounded-2xl border border-white/5">
+            <div className="flex items-center gap-1 sm:gap-2 bg-white/5 p-1.5 sm:p-2 rounded-2xl border border-white/5">
               {['👍', '😂', '🔥', '❤️', '👀'].map(emoji => (
                 <button 
                   key={emoji}
                   onClick={() => sendReaction(emoji)}
-                  className="w-10 h-10 flex items-center justify-center hover:bg-white/10 rounded-xl transition-all hover:scale-110 active:scale-90 text-xl"
+                  className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center hover:bg-white/10 rounded-xl transition-all hover:scale-110 active:scale-90 text-base sm:text-xl"
                 >
                   {emoji}
                 </button>
@@ -2405,13 +2420,13 @@ export const WatchParty = () => {
           id="watchparty-live-chat"
           className="scroll-mt-[230px] px-4 sm:px-0 lg:px-0 lg:col-span-1 lg:col-start-4 lg:row-start-1 lg:row-span-2 flex flex-col h-[520px] sm:h-[600px] lg:h-[calc(100vh-120px)] bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden shadow-xl"
         >
-          <div className="p-3 border-b border-white/5 flex items-center justify-between bg-white/5">
+          <div className="p-2.5 sm:p-3 border-b border-white/5 flex items-center justify-between bg-white/5">
             <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
               <button
                 type="button"
                 id="tab-live-chat"
                 onClick={() => setActiveSidebarTab('chat')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-all ${
                   activeSidebarTab === 'chat'
                     ? 'bg-emerald-600 text-white shadow-md'
                     : 'text-gray-400 hover:text-white'
@@ -2424,7 +2439,7 @@ export const WatchParty = () => {
                 type="button"
                 id="tab-live-participants"
                 onClick={() => setActiveSidebarTab('participants')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-all ${
                   activeSidebarTab === 'participants'
                     ? 'bg-emerald-600 text-white shadow-md'
                     : 'text-gray-400 hover:text-white'
@@ -2442,7 +2457,7 @@ export const WatchParty = () => {
 
             <div className="flex items-center gap-1.5 bg-emerald-500/10 px-2 py-1 rounded-full border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wider">
+              <span className="text-[9px] sm:text-[10px] font-black text-emerald-400 uppercase tracking-wider">
                 {liveUsers.length} Live
               </span>
             </div>
@@ -2450,8 +2465,8 @@ export const WatchParty = () => {
 
           {activeSidebarTab === 'chat' ? (
             <>
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-                <div className="flex flex-wrap gap-2 mb-4">
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-hide">
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3 sm:mb-4">
                   <AnimatePresence>
                     {allRoomUsers.map((u) => {
                       const isLive = isUserLive(u, presenceTick);
@@ -2463,7 +2478,7 @@ export const WatchParty = () => {
                           exit={{ scale: 0, opacity: 0 }}
                           onClick={() => setSelectedUser(u)}
                           title={`${u.username} (${isLive ? 'LIVE' : `OFFLINE - ${formatLastSeen(u.lastSeen, presenceTick)}`})`}
-                          className={`relative w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 transition-all ${
+                          className={`relative w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-[9px] sm:text-[10px] font-bold border-2 transition-all ${
                             u.speaking || speakingUsers[u.uid || u.username] 
                               ? 'border-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)] scale-110' 
                               : isLive 
@@ -2472,7 +2487,7 @@ export const WatchParty = () => {
                           } ${u.isHost ? 'bg-emerald-500 text-white' : 'bg-white/10 text-gray-300'}`}
                         >
                           {u.username[0].toUpperCase()}
-                          <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-[#0f0f0f] ${
+                          <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full border-2 border-[#0f0f0f] ${
                             isLive ? 'bg-emerald-500' : 'bg-gray-500'
                           }`} />
                           {(u.speaking || speakingUsers[u.uid || u.username]) && isLive && (
@@ -2488,14 +2503,14 @@ export const WatchParty = () => {
                 </div>
 
                 {messages.map((msg) => (
-                  <div key={msg.id} className="flex flex-col gap-1">
+                  <div key={msg.id} className="flex flex-col gap-0.5 sm:gap-1">
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-xs font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
+                      <span className={`text-[11px] sm:text-xs font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
                         {msg.username}
                       </span>
-                      <span className="text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="text-[8px] sm:text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
-                    <p className="text-sm text-gray-200 bg-white/5 p-2.5 rounded-xl rounded-tl-none border border-white/5">
+                    <p className="text-xs sm:text-sm text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl rounded-tl-none border border-white/5 leading-relaxed">
                       {msg.text}
                     </p>
                   </div>
@@ -2503,14 +2518,14 @@ export const WatchParty = () => {
                 <div ref={chatEndRef} />
               </div>
 
-              <form onSubmit={sendMessage} className="p-4 border-t border-white/5 bg-white/5">
+              <form onSubmit={sendMessage} className="p-3 sm:p-4 border-t border-white/5 bg-white/5">
                 <AnimatePresence>
                   {Object.keys(typingUsers).length > 0 && (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 10 }}
-                      className="text-[10px] text-emerald-500 font-bold mb-2 flex items-center gap-2"
+                      className="text-[9px] sm:text-[10px] text-emerald-500 font-bold mb-1.5 sm:mb-2 flex items-center gap-2"
                     >
                       <div className="flex gap-1">
                         <span className="w-1 h-1 bg-emerald-500 rounded-full animate-bounce" />
@@ -2531,16 +2546,16 @@ export const WatchParty = () => {
                       handleTyping();
                     }}
                     placeholder="Say something..."
-                    className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-4 pr-12 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                    className="w-full bg-black/40 border border-white/10 rounded-xl py-2.5 sm:py-3 pl-3.5 sm:pl-4 pr-11 sm:pr-12 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                   />
                   <button 
                     id="watchparty-send-btn"
                     type="submit"
                     disabled={!newMessage.trim()}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all disabled:opacity-50"
+                    className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all disabled:opacity-50"
                     aria-label="Send message"
                   >
-                    <Send size={18} />
+                    <Send size={16} />
                   </button>
                 </div>
               </form>

@@ -49,6 +49,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 <h4 className="text-xs font-bold uppercase tracking-widest text-white">Platform</h4>
                 <ul className="space-y-2 text-sm text-gray-400">
                   <li><Link to="/" className="hover:text-emerald-400 transition-colors">Live Rooms</Link></li>
+                  <li><Link to="/how-it-works" className="hover:text-emerald-400 transition-colors">How It Works</Link></li>
+                  <li><Link to="/netflix" className="hover:text-emerald-400 transition-colors">Netflix Party</Link></li>
                   <li><Link to="/friends" className="hover:text-emerald-400 transition-colors">Friends</Link></li>
                   <li><Link to="/profile" className="hover:text-emerald-400 transition-colors">My Profile</Link></li>
                   <li><Link to="/support" className="hover:text-emerald-400 transition-colors font-bold text-emerald-400">Support</Link></li>

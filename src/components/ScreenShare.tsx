@@ -64,6 +64,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
   const remoteStreams = useRef<{ [peerId: string]: MediaStream }>({});
   const processedSignals = useRef<Set<string>>(new Set());
   const hasStreamReadyRef = useRef<boolean>(false);
+  const offerTimestamps = useRef<{ [peerId: string]: number }>({});
+  const lastRequestTimeRef = useRef<number>(0);
 
   const onStreamReadyRef = useRef(onStreamReady);
   useEffect(() => {
@@ -94,15 +96,18 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     peerConnections.current = {};
     pendingCandidates.current = {};
     remoteStreams.current = {};
+    offerTimestamps.current = {};
     hasStreamReadyRef.current = false;
     if (onStreamReadyRef.current) onStreamReadyRef.current(null);
   }, []);
 
   // Process queued ICE candidates after remote description is set
-  const processPendingCandidates = useCallback((peerId: string, pc: RTCPeerConnection) => {
+  const drainPendingCandidates = useCallback((peerId: string, pc: RTCPeerConnection) => {
     const queue = pendingCandidates.current[peerId];
-    if (queue && queue.length > 0) {
-      queue.forEach(candidate => {
+    if (queue && queue.length > 0 && pc.remoteDescription) {
+      const candidatesToProcess = [...queue];
+      delete pendingCandidates.current[peerId];
+      candidatesToProcess.forEach(candidate => {
         try {
           pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
             console.warn('[ScreenShare] Non-fatal ICE candidate add error:', err);
@@ -111,7 +116,6 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
           console.warn('[ScreenShare] Error processing queued candidate:', e);
         }
       });
-      delete pendingCandidates.current[peerId];
     }
   }, []);
 
@@ -124,8 +128,9 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     const pc = new RTCPeerConnection(getIceServers());
     peerConnections.current[targetUserId] = pc;
 
+    // Send local ICE candidates to the target peer via Firestore signals
     pc.onicecandidate = (event) => {
-      if (event.candidate && cleanRoomId) {
+      if (event.candidate && cleanRoomId && myId) {
         addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
           from: myId,
           to: targetUserId,
@@ -138,46 +143,58 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       }
     };
 
+    // When signaling state changes to stable, drain queued candidates
+    pc.onsignalingstatechange = () => {
+      if (pc.signalingState === 'stable' && pc.remoteDescription) {
+        drainPendingCandidates(targetUserId, pc);
+      }
+    };
+
     pc.onconnectionstatechange = () => {
       console.log(`[ScreenShare] Connection state with ${targetUserId}:`, pc.connectionState);
       if (pc.connectionState === 'connected') {
         setIsConnecting(false);
-      } else if (pc.connectionState === 'failed') {
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         try {
           pc.close();
         } catch {
           // ignore
         }
         delete peerConnections.current[targetUserId];
+        delete pendingCandidates.current[targetUserId];
+        delete remoteStreams.current[targetUserId];
+        delete offerTimestamps.current[targetUserId];
       }
     };
 
     pc.ontrack = (event) => {
-      console.log(`[ScreenShare] Received remote screen track (${event.track.kind}):`, event.streams);
-      let stream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+      console.log(`[ScreenShare] Received remote screen track (${event.track.kind}):`, event.track.id);
+      
+      let stream = remoteStreams.current[targetUserId];
       if (!stream) {
-        if (!remoteStreams.current[targetUserId]) {
-          remoteStreams.current[targetUserId] = new MediaStream();
-        }
-        stream = remoteStreams.current[targetUserId];
-        if (!stream.getTracks().some(t => t.id === event.track.id)) {
-          stream.addTrack(event.track);
-        }
-      } else {
+        stream = new MediaStream();
         remoteStreams.current[targetUserId] = stream;
+      }
+
+      // Add track to stream if not already present
+      if (!stream.getTracks().some(t => t.id === event.track.id)) {
+        stream.addTrack(event.track);
       }
 
       setIsConnecting(false);
       hasStreamReadyRef.current = true;
+
+      // Pass fresh MediaStream wrapper so React state recognizes the stream update
       if (onStreamReadyRef.current) {
-        onStreamReadyRef.current(stream);
+        onStreamReadyRef.current(new MediaStream(stream.getTracks()));
       }
 
       event.track.onended = () => {
         console.log(`[ScreenShare] Remote track ended (${event.track.kind})`);
-        const activeTracks = stream ? stream.getTracks().filter(t => t.readyState === 'live') : [];
-        if (activeTracks.length === 0) {
+        const liveTracks = stream ? stream.getTracks().filter(t => t.readyState === 'live') : [];
+        if (liveTracks.length === 0) {
           hasStreamReadyRef.current = false;
+          delete remoteStreams.current[targetUserId];
           if (onStreamReadyRef.current) {
             onStreamReadyRef.current(null);
           }
@@ -185,19 +202,29 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       };
     };
 
-    // If host has active screen stream, attach all tracks to this peer connection
+    // If host has active screen stream, attach all live tracks to this peer connection
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        try {
-          pc.addTrack(track, localStreamRef.current!);
-        } catch (trackErr) {
-          console.warn('[ScreenShare] Non-fatal addTrack error:', trackErr);
+        if (track.readyState === 'live') {
+          try {
+            pc.addTrack(track, localStreamRef.current!);
+          } catch (trackErr) {
+            console.warn('[ScreenShare] Non-fatal addTrack error:', trackErr);
+          }
         }
       });
+    } else {
+      // Participant side: add transceivers to receive video and audio
+      try {
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+      } catch {
+        // Fallback for browsers that automatically handle recv transceivers
+      }
     }
 
     return pc;
-  }, [cleanRoomId, myId]);
+  }, [cleanRoomId, myId, drainPendingCandidates]);
 
   // Universal signal listener: runs for BOTH host and participants
   useEffect(() => {
@@ -215,7 +242,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       targetSet.add('host');
       if (hostId) targetSet.add(hostId);
     }
-    const targetList = Array.from(targetSet).slice(0, 10);
+    const targetList = Array.from(targetSet).filter(Boolean).slice(0, 10);
 
     const q = targetList.length > 1
       ? query(collection(db, `watchRooms/${cleanRoomId}/signals`), where('to', 'in', targetList))
@@ -233,8 +260,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
           // Prevent processing the exact same signal doc twice
           if (processedSignals.current.has(docId)) continue;
           processedSignals.current.add(docId);
-          if (processedSignals.current.size > 200) {
-            const staleKeys = Array.from(processedSignals.current).slice(0, 50);
+          if (processedSignals.current.size > 300) {
+            const staleKeys = Array.from(processedSignals.current).slice(0, 100);
             staleKeys.forEach(k => processedSignals.current.delete(k));
           }
 
@@ -246,18 +273,29 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
 
           try {
             if (data.type === 'screen-request') {
-              // Participant joined or refreshed and requested screen stream from host
+              // Participant requested screen stream from host
               if (localStreamRef.current && isHost) {
                 console.log(`[ScreenShare] Host received screen-request from ${fromPeer}`);
                 const existingPc = peerConnections.current[fromPeer];
+                const lastOfferTime = offerTimestamps.current[fromPeer] || 0;
+                const timeSinceLastOffer = Date.now() - lastOfferTime;
+
+                // If connection is already healthy and active, no need to renegotiate
+                if (existingPc && existingPc.connectionState === 'connected') {
+                  console.log(`[ScreenShare] Peer ${fromPeer} already connected and receiving stream`);
+                  deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
+                  continue;
+                }
+
+                // If an offer was created less than 2.5 seconds ago and is pending answer, do not destroy it
+                if (existingPc && timeSinceLastOffer < 2500 && existingPc.connectionState !== 'failed') {
+                  console.log(`[ScreenShare] Offer for ${fromPeer} is already in-flight, awaiting answer`);
+                  deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
+                  continue;
+                }
+
+                // Close stale connection if needed
                 if (existingPc) {
-                  // If connection is already healthy and active, no need to renegotiate
-                  if (existingPc.connectionState === 'connected') {
-                    console.log(`[ScreenShare] Peer ${fromPeer} already connected`);
-                    deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
-                    continue;
-                  }
-                  // Reset stuck or pending connection
                   try {
                     existingPc.close();
                   } catch {
@@ -267,11 +305,14 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
                 }
 
                 const pc = getOrCreatePeerConnection(fromPeer);
+                offerTimestamps.current[fromPeer] = Date.now();
+
                 const offer = await pc.createOffer({
                   offerToReceiveVideo: false,
                   offerToReceiveAudio: false,
                 });
                 await pc.setLocalDescription(offer);
+
                 await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
                   from: myId,
                   to: fromPeer,
@@ -284,6 +325,14 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
               // Participant received screen offer from host
               console.log(`[ScreenShare] Participant received screen-offer from ${fromPeer}`);
               let pc = peerConnections.current[fromPeer];
+
+              // If already connected and playing, ignore duplicate offer
+              if (pc && pc.connectionState === 'connected' && hasStreamReadyRef.current) {
+                console.log(`[ScreenShare] Already connected to ${fromPeer}, ignoring redundant offer`);
+                deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
+                continue;
+              }
+
               if (pc && pc.signalingState !== 'stable') {
                 try {
                   pc.close();
@@ -300,9 +349,12 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
 
               const offerDesc = new RTCSessionDescription(JSON.parse(data.signal));
               await pc.setRemoteDescription(offerDesc);
-              processPendingCandidates(fromPeer, pc);
+              drainPendingCandidates(fromPeer, pc);
 
-              const answer = await pc.createAnswer();
+              const answer = await pc.createAnswer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: true,
+              });
               await pc.setLocalDescription(answer);
 
               await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
@@ -319,7 +371,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
               if (pc && pc.signalingState === 'have-local-offer') {
                 const answerDesc = new RTCSessionDescription(JSON.parse(data.signal));
                 await pc.setRemoteDescription(answerDesc);
-                processPendingCandidates(fromPeer, pc);
+                drainPendingCandidates(fromPeer, pc);
               }
             } else if (data.type === 'screen-candidate') {
               const candidate = JSON.parse(data.signal);
@@ -327,7 +379,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
                 const pc = peerConnections.current[fromPeer];
                 if (pc && pc.remoteDescription && pc.remoteDescription.type) {
                   await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
-                    console.warn('[ScreenShare] ICE candidate add rejected:', err);
+                    console.warn('[ScreenShare] Non-fatal candidate add error:', err);
                   });
                 } else {
                   if (!pendingCandidates.current[fromPeer]) {
@@ -350,13 +402,14 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
                   // ignore
                 }
                 delete peerConnections.current[fromPeer];
+                delete remoteStreams.current[fromPeer];
               }
             }
           } catch (err) {
             console.error('[ScreenShare] Error handling screen signal:', data.type, err);
           }
 
-          // Clean up handled signal document
+          // Clean up handled signal document from Firestore
           deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
         }
       }
@@ -367,7 +420,7 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     return () => {
       unsubscribe();
     };
-  }, [cleanRoomId, myId, username, isHost, hostId, getOrCreatePeerConnection, processPendingCandidates]);
+  }, [cleanRoomId, myId, username, isHost, hostId, getOrCreatePeerConnection, drainPendingCandidates]);
 
   // Viewer/participant: if screen sharing is active in the room, request the stream from host
   useEffect(() => {
@@ -381,6 +434,10 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       // If participant already has live stream, no need to request
       if (hasStreamReadyRef.current) return;
 
+      const now = Date.now();
+      if (now - lastRequestTimeRef.current < 2000) return;
+      lastRequestTimeRef.current = now;
+
       try {
         setIsConnecting(true);
         console.log(`[ScreenShare] Sending screen-request to ${targetHost}`);
@@ -390,15 +447,6 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
           type: 'screen-request',
           time: new Date().toISOString(),
         });
-        // Also send to generic 'host' in case hostId is slightly mismatched
-        if (targetHost !== 'host') {
-          await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
-            from: myId,
-            to: 'host',
-            type: 'screen-request',
-            time: new Date().toISOString(),
-          }).catch(() => {});
-        }
       } catch (err) {
         console.warn('[ScreenShare] Failed to send screen request:', err);
       }
@@ -406,13 +454,13 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
 
     sendRequest();
 
-    // Periodic retry every 4 seconds if still not connected
+    // Periodic retry every 5 seconds if still not connected
     const interval = setInterval(() => {
       if (!hasStreamReadyRef.current) {
-        console.log('[ScreenShare] Still waiting for host stream, re-sending request...');
+        console.log('[ScreenShare] Still waiting for host stream, retrying request...');
         sendRequest();
       }
-    }, 4000);
+    }, 5000);
 
     return () => {
       clearInterval(interval);
@@ -428,29 +476,135 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
     };
   }, [cleanup]);
 
-  const startSharing = async () => {
+  const stopSharing = useCallback(async () => {
+    // Notify all peers that sharing stopped
+    const usersSnap = await getDocs(collection(db, `watchRooms/${cleanRoomId}/users`)).catch(() => null);
+    if (usersSnap) {
+      for (const userDoc of usersSnap.docs) {
+        if (userDoc.id !== myId) {
+          addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+            from: myId,
+            to: userDoc.id,
+            type: 'screen-stop',
+            time: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      }
+    }
+
+    // Broadcast generic screen-stop to room
+    addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+      from: myId,
+      to: 'all',
+      type: 'screen-stop',
+      time: new Date().toISOString(),
+    }).catch(() => {});
+
+    cleanup();
+    setIsSharing(false);
+    if (onSharingStateChange) onSharingStateChange(false);
+
+    if (isHost && cleanRoomId) {
+      updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+        isScreenSharing: false,
+        screenHostId: null
+      }).catch(() => {});
+    }
+  }, [cleanRoomId, myId, cleanup, isHost, onSharingStateChange]);
+
+  const startSharing = useCallback(async () => {
     setError(null);
 
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      setError('Screen sharing is not supported in this browser. Please use a desktop browser like Chrome or Edge.');
+    const isMobile = typeof navigator !== 'undefined' && (
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
+    );
+
+    const hasGetDisplayMedia = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia);
+    const hasGetUserMedia = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+
+    if (!hasGetDisplayMedia && !hasGetUserMedia) {
+      setError('Screen/camera sharing is not supported in this browser. Please try Chrome or Safari.');
       return;
     }
 
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: 'monitor',
-          frameRate: { max: 30 },
-        },
-        audio: true
-      });
+      let stream: MediaStream | null = null;
+
+      if (hasGetDisplayMedia) {
+        if (isMobile) {
+          // Mobile devices (Android Chrome, iOS Safari 13+):
+          // Avoid constraints like displaySurface: 'monitor' or audio: true which cause OverconstrainedError on mobile
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+            });
+          } catch (mobileErr: unknown) {
+            const mErr = mobileErr as { name?: string };
+            if (mErr?.name === 'NotAllowedError' || mErr?.name === 'AbortError') {
+              console.log('[ScreenShare] Screen share prompt dismissed on mobile.');
+              return;
+            }
+            console.warn('[ScreenShare] getDisplayMedia({ video: true }) failed on mobile, attempting frameRate fallback:', mobileErr);
+            try {
+              stream = await navigator.mediaDevices.getDisplayMedia({
+                video: { frameRate: { max: 30 } },
+              });
+            } catch (retryErr: unknown) {
+              const rErr = retryErr as { name?: string };
+              if (rErr?.name === 'NotAllowedError' || rErr?.name === 'AbortError') {
+                return;
+              }
+              // If getDisplayMedia is unsupported on this mobile webview/browser, offer live camera stream
+              if (hasGetUserMedia) {
+                console.warn('[ScreenShare] Falling back to camera stream on mobile:', retryErr);
+                stream = await navigator.mediaDevices.getUserMedia({
+                  video: { facingMode: 'user', width: { ideal: 1280 } },
+                  audio: true,
+                });
+              } else {
+                throw retryErr;
+              }
+            }
+          }
+        } else {
+          // Desktop browsers: attempt display capture with system audio, fallback to video-only if audio rejected
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: {
+                frameRate: { ideal: 30, max: 30 },
+              },
+              audio: true,
+            });
+          } catch (desktopErr: unknown) {
+            const dErr = desktopErr as { name?: string };
+            if (dErr?.name === 'NotAllowedError' || dErr?.name === 'AbortError') {
+              return;
+            }
+            console.warn('[ScreenShare] Desktop getDisplayMedia with audio failed, retrying video only:', desktopErr);
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+            });
+          }
+        }
+      } else if (hasGetUserMedia) {
+        // Fallback for mobile browsers lacking display capture API
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 } },
+          audio: true,
+        });
+      }
+
+      if (!stream) {
+        throw new Error('Failed to acquire stream');
+      }
 
       localStreamRef.current = stream;
       setIsSharing(true);
       if (onSharingStateChange) onSharingStateChange(true);
       if (onStreamReady) onStreamReady(stream);
 
-      // Update room document in Firestore
+      // Update room document in Firestore so all participants know screen share is active
       await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
         isScreenSharing: true,
         screenHostId: myId
@@ -464,6 +618,21 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
           if (otherUserId !== myId) {
             try {
               const pc = getOrCreatePeerConnection(otherUserId);
+
+              // Attach stream tracks if not already present on this peer connection
+              const senders = pc.getSenders();
+              stream.getTracks().forEach(track => {
+                const existing = senders.find(s => s.track?.id === track.id);
+                if (!existing && track.readyState === 'live') {
+                  try {
+                    pc.addTrack(track, stream!);
+                  } catch (e) {
+                    console.warn('[ScreenShare] Non-fatal addTrack error:', e);
+                  }
+                }
+              });
+
+              offerTimestamps.current[otherUserId] = Date.now();
               const offer = await pc.createOffer({
                 offerToReceiveVideo: false,
                 offerToReceiveAudio: false,
@@ -492,51 +661,17 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       }
     } catch (err: unknown) {
       const errorObj = err as { name?: string; message?: string };
-      if (errorObj?.name !== 'NotAllowedError') {
-        console.error('[ScreenShare] Error starting screen share:', err);
-        setError('Failed to start screen share. Please grant screen recording permissions.');
+      if (errorObj?.name === 'NotAllowedError' || errorObj?.name === 'AbortError') {
+        console.log('[ScreenShare] User dismissed or cancelled screen sharing prompt.');
+        return;
       }
+      console.error('[ScreenShare] Error starting screen share:', err);
+      setError('Unable to start screen share. Please check device permissions and try again.');
     }
-  };
-
-  const stopSharing = async () => {
-    // Notify all peers that sharing stopped
-    const usersSnap = await getDocs(collection(db, `watchRooms/${cleanRoomId}/users`)).catch(() => null);
-    if (usersSnap) {
-      for (const userDoc of usersSnap.docs) {
-        if (userDoc.id !== myId) {
-          addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
-            from: myId,
-            to: userDoc.id,
-            type: 'screen-stop',
-            time: new Date().toISOString(),
-          }).catch(() => {});
-        }
-      }
-    }
-
-    // Also broadcast to generic 'host' and room
-    addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
-      from: myId,
-      to: 'all',
-      type: 'screen-stop',
-      time: new Date().toISOString(),
-    }).catch(() => {});
-
-    cleanup();
-    setIsSharing(false);
-    if (onSharingStateChange) onSharingStateChange(false);
-
-    if (isHost && cleanRoomId) {
-      updateDoc(doc(db, 'watchRooms', cleanRoomId), {
-        isScreenSharing: false,
-        screenHostId: null
-      }).catch(() => {});
-    }
-  };
+  }, [cleanRoomId, myId, onSharingStateChange, onStreamReady, getOrCreatePeerConnection, stopSharing]);
 
   // Re-request stream manual button for viewers
-  const handleRefreshStream = async () => {
+  const handleRefreshStream = useCallback(async () => {
     if (!isHost && cleanRoomId) {
       setIsConnecting(true);
       hasStreamReadyRef.current = false;
@@ -548,19 +683,11 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
           type: 'screen-request',
           time: new Date().toISOString(),
         });
-        if (targetHost !== 'host') {
-          await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
-            from: myId,
-            to: 'host',
-            type: 'screen-request',
-            time: new Date().toISOString(),
-          }).catch(() => {});
-        }
       } catch (err) {
         console.warn('[ScreenShare] Manual refresh request error:', err);
       }
     }
-  };
+  }, [cleanRoomId, hostId, isHost, myId]);
 
   if (!isHost) {
     if (isScreenSharingActive) {
@@ -568,10 +695,10 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
         <button
           onClick={handleRefreshStream}
           title="Refresh screen share stream"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/10 transition-all"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/10 transition-all shrink-0"
         >
           <RefreshCw size={13} className={isConnecting ? 'animate-spin text-emerald-400' : ''} />
-          <span className="hidden sm:inline">{isConnecting ? 'Connecting...' : 'Refresh Screen'}</span>
+          <span>{isConnecting ? 'Connecting...' : 'Refresh'}</span>
         </button>
       );
     }
@@ -581,23 +708,23 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
   return (
     <div className="flex items-center gap-2">
       {error && (
-        <div className="hidden sm:flex items-center gap-1.5 text-xs text-red-400 bg-red-500/10 px-2.5 py-1 rounded-lg border border-red-500/20">
-          <AlertCircle size={13} />
-          <span className="max-w-[200px] truncate">{error}</span>
+        <div className="flex items-center gap-1.5 text-[11px] text-red-400 bg-red-500/10 px-2.5 py-1 rounded-lg border border-red-500/20 max-w-[180px] sm:max-w-[260px] truncate">
+          <AlertCircle size={13} className="shrink-0" />
+          <span className="truncate">{error}</span>
         </div>
       )}
       <button
         onClick={isSharing ? stopSharing : startSharing}
-        className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-md ${
+        className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-xs font-bold transition-all shadow-md shrink-0 ${
           isSharing 
             ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-900/30' 
             : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
         }`}
+        title={isSharing ? 'Stop Screen Share' : 'Share Screen'}
       >
         {isSharing ? <MonitorOff size={14} /> : <Monitor size={14} />}
-        <span>{isSharing ? 'Stop Screen Share' : 'Share Screen'}</span>
+        <span>{isSharing ? 'Stop Share' : 'Share Screen'}</span>
       </button>
     </div>
   );
 };
-

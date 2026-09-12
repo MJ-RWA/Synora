@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { collection, query, where, onSnapshot, limit, doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { WatchRoom } from '../types';
-import { SAMPLE_MEDIA, SampleMedia } from '../config/sampleMedia';
 import { 
   Users, 
   Play, 
@@ -25,15 +24,13 @@ import {
   HelpCircle,
   ChevronDown,
   Youtube,
-  Layers,
   CheckCircle2,
-  Laptop,
-  ShieldCheck,
   PlayCircle,
   Award,
-  Clock
+  Clock,
+  Cpu
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { WatchPartyModal } from '../components/WatchPartyModal';
 import { JoinPartyModal } from '../components/JoinPartyModal';
 import { useAuth } from '../hooks/useAuth';
@@ -48,8 +45,7 @@ export const Home = () => {
   const [loadingMyParties, setLoadingMyParties] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
-  const [createModalTab, setCreateModalTab] = useState<'sample' | 'custom' | 'embed' | 'screen' | 'netflix'>('sample');
-  const [selectedSampleForParty, setSelectedSampleForParty] = useState<SampleMedia | null>(null);
+  const [createModalTab, setCreateModalTab] = useState<'custom' | 'embed' | 'screen' | 'netflix'>('embed');
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
   const [roomToDelete, setRoomToDelete] = useState<WatchRoom | null>(null);
   const [isDeletingRoom, setIsDeletingRoom] = useState(false);
@@ -57,8 +53,7 @@ export const Home = () => {
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const handleOpenCreateWithTab = (tab: 'sample' | 'custom' | 'embed' | 'screen' | 'netflix') => {
-    setSelectedSampleForParty(null);
+  const handleOpenCreateWithTab = (tab: 'custom' | 'embed' | 'screen' | 'netflix') => {
     setCreateModalTab(tab);
     setIsCreateModalOpen(true);
   };
@@ -245,11 +240,6 @@ export const Home = () => {
     });
   };
 
-  const handleStartWithSample = (sample: SampleMedia) => {
-    setSelectedSampleForParty(sample);
-    setIsCreateModalOpen(true);
-  };
-
   const handleConfirmDeleteRoom = async () => {
     if (!roomToDelete?.id) return;
     try {
@@ -312,7 +302,7 @@ export const Home = () => {
           >
             <button 
               id="heroCreatePartyBtn"
-              onClick={() => handleOpenCreateWithTab('sample')}
+              onClick={() => handleOpenCreateWithTab('embed')}
               className="w-full sm:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-base transition-all shadow-xl shadow-emerald-900/30 flex items-center justify-center gap-3 hover:scale-105 active:scale-95"
             >
               <Sparkles size={18} />
@@ -321,7 +311,7 @@ export const Home = () => {
 
             <button 
               id="heroHowItWorksBtn"
-              onClick={() => scrollToSection('how-it-works')}
+              onClick={() => navigate('/how-it-works')}
               className="w-full sm:w-auto px-7 py-4 bg-white/5 hover:bg-white/10 text-gray-200 hover:text-white rounded-2xl font-black text-base transition-all border border-white/10 flex items-center justify-center gap-2 hover:scale-105 active:scale-95 backdrop-blur-md"
             >
               <HelpCircle size={18} />
@@ -378,7 +368,7 @@ export const Home = () => {
               </div>
               <h3 className="text-xl font-bold text-white">Create a Watch Party</h3>
               <p className="text-sm text-gray-400 leading-relaxed">
-                Choose your content source—YouTube, a Netflix watch link via the extension, open sample films, custom video streams, or your live screen. Set your room title and nickname.
+                Choose your content source—YouTube, a Netflix watch link via our extension, custom video streams, or your live screen. Set your room title and nickname.
               </p>
             </div>
             <div className="mt-6 pt-4 border-t border-white/5 flex items-center gap-2 text-xs font-semibold text-emerald-400">
@@ -463,46 +453,53 @@ export const Home = () => {
                 <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
                   <Tv size={24} />
                 </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-black uppercase tracking-wider">
-                  Experimental
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
+                  Companion App
                 </span>
               </div>
               <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
                 Netflix
               </h3>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Connect the Synora browser extension to synchronize playback with friends using your own authorized Netflix session.
+                Connect the Synora companion extension to synchronize playback with friends using your own personal Netflix account.
               </p>
             </div>
-            <div className="mt-6 pt-4 border-t border-white/5">
+            <div className="mt-6 pt-4 border-t border-white/5 flex items-center gap-2">
               <button
-                onClick={() => scrollToSection('netflix-guide')}
-                className="w-full py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 border border-emerald-500/30"
+                onClick={() => navigate('/netflix')}
+                className="flex-1 py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 border border-emerald-500/30"
               >
-                Extension Guide <ArrowRight size={12} />
+                Netflix Guide <ArrowRight size={12} />
+              </button>
+              <button
+                onClick={() => handleOpenCreateWithTab('netflix')}
+                className="p-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-all border border-white/10"
+                title="Create Netflix Room"
+              >
+                <Sparkles size={14} />
               </button>
             </div>
           </div>
 
-          {/* Card 3: Free Sample Media */}
+          {/* Card 3: Custom Direct Stream / HLS */}
           <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 flex flex-col justify-between hover:border-blue-500/40 transition-all group">
             <div className="space-y-3">
               <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
                 <Film size={24} />
               </div>
               <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors">
-                Open Films & HLS
+                Custom Stream & HLS
               </h3>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Jump right in with public domain films (*Big Buck Bunny*, *Sintel*) or paste any direct custom `.mp4` or `.m3u8` HLS URL.
+                Synchronize any direct video URL—including `.mp4`, `.webm`, or live `.m3u8` HLS streaming feeds with full room alignment.
               </p>
             </div>
             <div className="mt-6 pt-4 border-t border-white/5">
               <button
-                onClick={() => scrollToSection('sample-media')}
+                onClick={() => handleOpenCreateWithTab('custom')}
                 className="w-full py-2.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 border border-blue-500/30"
               >
-                Browse Films <ArrowRight size={12} />
+                Launch Stream Party <ArrowRight size={12} />
               </button>
             </div>
           </div>
@@ -527,91 +524,6 @@ export const Home = () => {
               >
                 Share Screen Party <ArrowRight size={12} />
               </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 3. Netflix Extension Guide (Visual Walkthrough) */}
-      <section id="netflix-guide" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative overflow-hidden rounded-[36px] bg-gradient-to-br from-zinc-900/90 via-black to-zinc-950/90 border border-white/10 p-8 sm:p-12 shadow-2xl">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-12">
-            <div>
-              <div className="flex items-center gap-3">
-                <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-black uppercase tracking-wider">
-                  Experimental Developer Preview
-                </span>
-                <span className="text-xs text-gray-400">Chrome Extension Manifest V3</span>
-              </div>
-              <h2 className="text-3xl sm:text-4xl font-black text-white mt-3">
-                Watch Netflix Together
-              </h2>
-              <p className="text-sm text-gray-400 mt-2 max-w-2xl">
-                The Synora Watch Party Bridge connects your active Netflix playback with your Synora room while keeping your session completely private.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => handleOpenCreateWithTab('netflix')}
-                className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-900/20 flex items-center gap-2"
-              >
-                <Sparkles size={14} /> Start Netflix Room
-              </button>
-            </div>
-          </div>
-
-          {/* 5-Step Visual Sequence */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div className="bg-white/5 border border-white/5 rounded-2xl p-5 space-y-2">
-              <span className="text-xs font-mono font-black text-emerald-400">01</span>
-              <h4 className="text-sm font-bold text-white">Install Extension</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Available for local installation during development (`npm run build:extension` → Chrome Developer Mode → Load unpacked `extension/dist`).
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/5 rounded-2xl p-5 space-y-2">
-              <span className="text-xs font-mono font-black text-emerald-400">02</span>
-              <h4 className="text-sm font-bold text-white">Connect to Synora</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Open Synora. The bridge communicates automatically; verify the green indicator in the bottom-right diagnostics panel.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/5 rounded-2xl p-5 space-y-2">
-              <span className="text-xs font-mono font-black text-emerald-400">03</span>
-              <h4 className="text-sm font-bold text-white">Open Netflix</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                In another browser tab, log into your own Netflix account and navigate to the show or film you want to watch.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/5 rounded-2xl p-5 space-y-2">
-              <span className="text-xs font-mono font-black text-emerald-400">04</span>
-              <h4 className="text-sm font-bold text-white">Create / Join Room</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Create a Synora Watch Party with your Netflix URL, or join your host's party link.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/5 rounded-2xl p-5 space-y-2">
-              <span className="text-xs font-mono font-black text-emerald-400">05</span>
-              <h4 className="text-sm font-bold text-white">Watch in Sync</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Whenever the host plays, pauses, or scrubs, the extension syncs your local Netflix player seamlessly.
-              </p>
-            </div>
-          </div>
-
-          {/* Privacy Guarantee Banner */}
-          <div className="mt-8 p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col sm:flex-row sm:items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-              <ShieldCheck size={22} />
-            </div>
-            <div className="text-xs leading-relaxed text-gray-300">
-              <span className="font-bold text-white">100% Privacy-Preserving Guarantee: </span>
-              Synora never asks for or collects Netflix passwords, cookies, or DRM keys. All video playback occurs strictly within your own authorized Netflix session. Synora never streams or proxies video through its servers.
             </div>
           </div>
         </div>
@@ -792,7 +704,6 @@ export const Home = () => {
 
               <button 
                 onClick={() => {
-                  setSelectedSampleForParty(null);
                   setIsCreateModalOpen(true);
                 }}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-950/30"
@@ -916,7 +827,6 @@ export const Home = () => {
               </div>
               <button
                 onClick={() => {
-                  setSelectedSampleForParty(null);
                   setIsCreateModalOpen(true);
                 }}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all"
@@ -952,7 +862,6 @@ export const Home = () => {
 
             <button 
               onClick={() => {
-                setSelectedSampleForParty(null);
                 setIsCreateModalOpen(true);
               }}
               className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-xl text-xs font-bold transition-all"
@@ -1061,7 +970,6 @@ export const Home = () => {
             </div>
             <button 
               onClick={() => {
-                setSelectedSampleForParty(null);
                 setIsCreateModalOpen(true);
               }}
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-emerald-900/20"
@@ -1072,157 +980,50 @@ export const Home = () => {
         )}
       </section>
 
-      {/* Quick Launch Free Sample Movies */}
-      <section id="sample-media" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20">
-                <Film size={20} />
+      {/* Learn More & Architecture Guides */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-950/30 via-zinc-900 to-black border border-white/10 p-8 flex flex-col justify-between hover:border-emerald-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                <Cpu size={24} />
               </div>
-              <h2 className="text-2xl sm:text-3xl font-black text-white">Quick Start Sample Media</h2>
-            </div>
-            <p className="text-sm text-gray-400 mt-1">One-click instant watch rooms with high-quality public domain films</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          {SAMPLE_MEDIA.map((item) => (
-            <div 
-              key={item.id}
-              onClick={() => handleStartWithSample(item)}
-              className="group relative bg-white/[0.02] hover:bg-white/[0.05] border border-white/5 hover:border-emerald-500/50 rounded-3xl overflow-hidden transition-all duration-300 cursor-pointer flex flex-col shadow-xl"
-            >
-              <div className="aspect-[16/9] relative overflow-hidden bg-black/40">
-                <img 
-                  src={item.poster} 
-                  alt={item.title} 
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
-                <div className="absolute bottom-3 left-3 flex items-center gap-2">
-                  <span className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-[10px] font-bold text-white uppercase tracking-wider border border-white/10">
-                    {item.category}
-                  </span>
-                  <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/30">
-                    {item.duration}
-                  </span>
-                </div>
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
-                  <div className="w-14 h-14 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xl shadow-emerald-900/40 group-hover:scale-110 transition-transform">
-                    <Play size={24} fill="currentColor" className="ml-1" />
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-5 flex-1 flex flex-col justify-between">
-                <div>
-                  <h3 className="text-lg font-black text-white group-hover:text-emerald-400 transition-colors">
-                    {item.title}
-                  </h3>
-                  <p className="text-xs text-gray-400 mt-2 line-clamp-2 leading-relaxed">
-                    {item.description}
-                  </p>
-                </div>
-
-                <div className="mt-5 pt-3 border-t border-white/5 flex items-center justify-between">
-                  <span className="text-xs text-gray-500 font-bold">Free Open Film</span>
-                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                    Launch Room <ArrowRight size={12} />
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* How It Works & Architecture Section */}
-      <section id="how-it-works" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative overflow-hidden rounded-[40px] bg-gradient-to-br from-emerald-950/40 via-black to-blue-950/40 border border-white/10 p-8 sm:p-12 lg:p-16 shadow-2xl space-y-16">
-          <div className="text-center max-w-3xl mx-auto">
-            <span className="px-3.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-black uppercase tracking-widest">
-              Under The Hood
-            </span>
-            <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight mt-3">
-              How Synora Works
-            </h2>
-            <p className="text-gray-400 text-sm mt-3">
-              Synora coordinates playback timing, social interactions, and peer-to-peer audio without hosting copyrighted media or running heavy video proxies.
-            </p>
-          </div>
-
-          {/* Architecture Visual Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black">
-                <Laptop size={20} />
-              </div>
-              <h4 className="text-base font-bold text-white">Synora Web App</h4>
+              <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
+                How Synora Works Under The Hood
+              </h3>
               <p className="text-xs text-gray-400 leading-relaxed">
-                Modern React single-page app managing room state, media player controls, floating reactions, and participant rosters.
+                Explore our host-authoritative timecode broadcast, automatic drift compensation, and zero-server peer-to-peer WebRTC mesh architecture.
               </p>
             </div>
-
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-black">
-                <Radio size={20} />
-              </div>
-              <h4 className="text-base font-bold text-white">Firestore Sync Engine</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Lightweight real-time listener synchronization for player timestamps, play/pause states, and chat messages.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center font-black">
-                <Mic size={20} />
-              </div>
-              <h4 className="text-base font-bold text-white">WebRTC Mesh</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Direct peer-to-peer audio and screen sharing with STUN/TURN traversal. Audio and video streams never touch central servers.
-              </p>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-black">
-                <Layers size={20} />
-              </div>
-              <h4 className="text-base font-bold text-white">Extension Bridge</h4>
-              <p className="text-xs text-gray-400 leading-relaxed">
-                Manifest V3 companion extension synchronizing commands with your local Netflix tab. Completely isolated and password-free.
-              </p>
+            <div className="mt-6 pt-4 border-t border-white/5">
+              <Link
+                to="/how-it-works"
+                className="inline-flex items-center gap-2 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
+              >
+                Read Full Architecture Guide <ArrowRight size={14} />
+              </Link>
             </div>
           </div>
 
-          {/* Simple Step Sequence */}
-          <div className="pt-6 border-t border-white/10">
-            <h3 className="text-lg font-bold text-white mb-6 text-center">Room Workflow</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-6 space-y-2">
-                <div className="text-emerald-400 text-xs font-black uppercase tracking-wider">Step 1</div>
-                <div className="text-sm font-bold text-white">Host Creates Room</div>
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  Host configures the room type, selects content, and initiates the real-time session.
-                </p>
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-red-950/30 via-zinc-900 to-black border border-white/10 p-8 flex flex-col justify-between hover:border-red-500/40 transition-all group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center">
+                <Tv size={24} />
               </div>
-
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-6 space-y-2">
-                <div className="text-blue-400 text-xs font-black uppercase tracking-wider">Step 2</div>
-                <div className="text-sm font-bold text-white">Friends Join Instantly</div>
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  Participants connect via invite link or room code with guest names or Google profiles.
-                </p>
-              </div>
-
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-6 space-y-2">
-                <div className="text-purple-400 text-xs font-black uppercase tracking-wider">Step 3</div>
-                <div className="text-sm font-bold text-white">Synchronized Co-Watching</div>
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  Playback updates sync instantly while everyone talks on voice and reacts with floating emojis.
-                </p>
-              </div>
+              <h3 className="text-xl font-bold text-white group-hover:text-red-400 transition-colors">
+                Watch Netflix Together Companion Guide
+              </h3>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Step-by-step setup for the Manifest V3 companion extension, local developer installation, and our 100% privacy-preserving security guarantees.
+              </p>
+            </div>
+            <div className="mt-6 pt-4 border-t border-white/5">
+              <Link
+                to="/netflix"
+                className="inline-flex items-center gap-2 text-xs font-bold text-red-400 hover:text-red-300 transition-colors"
+              >
+                Open Netflix Companion Guide <ArrowRight size={14} />
+              </Link>
             </div>
           </div>
         </div>
@@ -1327,7 +1128,7 @@ export const Home = () => {
             },
             {
               q: "How do I create a Watch Party?",
-              a: "Click 'Create a Watch Party' anywhere on Synora. Pick a supported media source (a sample open film, a custom MP4/HLS stream URL, an embedded YouTube link, live screen sharing, or Netflix with the browser extension). Choose a room title and nickname, select whether the party is Public or Private, and launch!"
+              a: "Click 'Create a Watch Party' anywhere on Synora. Pick a supported media source (an embedded YouTube link, a custom MP4/HLS stream URL, live screen sharing, or Netflix with our companion extension). Choose a room title and nickname, select whether the party is Public or Private, and launch!"
             },
             {
               q: "Are Watch Parties private?",
@@ -1355,7 +1156,7 @@ export const Home = () => {
             },
             {
               q: "Do I need the browser extension for everything?",
-              a: "No! The browser extension is only needed for Netflix synchronization. YouTube, sample films, custom direct streaming URLs (.mp4, .m3u8), screen sharing, voice chat, and live chat work out-of-the-box in any modern desktop or mobile browser with zero extensions installed."
+              a: "No! The browser extension is only needed for Netflix synchronization. YouTube, custom direct streaming URLs (.mp4, .m3u8), screen sharing, voice chat, and live chat work out-of-the-box in any modern desktop or mobile browser with zero extensions installed."
             },
             {
               q: "Can I use voice chat and share my screen?",
@@ -1404,7 +1205,7 @@ export const Home = () => {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
             <button
-              onClick={() => handleOpenCreateWithTab('sample')}
+              onClick={() => handleOpenCreateWithTab('embed')}
               className="w-full sm:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-base transition-all shadow-xl shadow-emerald-950/40 flex items-center justify-center gap-2"
             >
               <Sparkles size={18} /> Start Watching Together
@@ -1424,11 +1225,7 @@ export const Home = () => {
         isOpen={isCreateModalOpen} 
         onClose={() => {
           setIsCreateModalOpen(false);
-          setSelectedSampleForParty(null);
         }}
-        defaultSample={selectedSampleForParty}
-        defaultVideoUrl={selectedSampleForParty?.videoUrl}
-        defaultTitle={selectedSampleForParty?.title}
         defaultTab={createModalTab}
       />
 

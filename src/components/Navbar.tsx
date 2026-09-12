@@ -9,7 +9,9 @@ import {
   Coffee, 
   Menu, 
   X, 
-  LayoutDashboard
+  LayoutDashboard,
+  Cpu,
+  Tv
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { Notifications } from './Notifications';
@@ -87,6 +89,30 @@ export const Navbar = () => {
                     Friends
                   </Link>
                 )}
+
+                <Link 
+                  to="/how-it-works" 
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                    isActive('/how-it-works') 
+                      ? 'bg-emerald-600/10 text-emerald-400' 
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <Cpu size={15} />
+                  How It Works
+                </Link>
+
+                <Link 
+                  to="/netflix" 
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                    isActive('/netflix') || isActive('/netflix-party')
+                      ? 'bg-emerald-600/10 text-emerald-400' 
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <Tv size={15} />
+                  Netflix Party
+                </Link>
 
                 <Link 
                   to="/support" 
@@ -222,6 +248,26 @@ export const Navbar = () => {
                     <Users size={18} /> Friends
                   </Link>
                 )}
+
+                <Link
+                  to="/how-it-works"
+                  onClick={() => setIsMenuOpen(false)}
+                  className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all ${
+                    isActive('/how-it-works') ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:bg-white/5'
+                  }`}
+                >
+                  <Cpu size={18} /> How It Works
+                </Link>
+
+                <Link
+                  to="/netflix"
+                  onClick={() => setIsMenuOpen(false)}
+                  className={`flex items-center gap-3 p-3 rounded-xl text-sm font-bold transition-all ${
+                    isActive('/netflix') || isActive('/netflix-party') ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:bg-white/5'
+                  }`}
+                >
+                  <Tv size={18} /> Netflix Party
+                </Link>
 
                 <Link
                   to="/support"

@@ -8,6 +8,8 @@ import { Friends } from './pages/Friends';
 import { Profile } from './pages/Profile';
 import { Login } from './pages/Login';
 import { Support } from './pages/Support';
+import { HowItWorks } from './pages/HowItWorks';
+import { NetflixParty } from './pages/NetflixParty';
 import { PrivacyPolicy } from './pages/PrivacyPolicy';
 import { TermsOfService } from './pages/TermsOfService';
 import { DMCA } from './pages/DMCA';
@@ -43,6 +45,9 @@ export default function App() {
             <Route path="/friends" element={<Layout><Friends /></Layout>} />
             <Route path="/profile" element={<Layout><Profile /></Layout>} />
             <Route path="/support" element={<Layout><Support /></Layout>} />
+            <Route path="/how-it-works" element={<Layout><HowItWorks /></Layout>} />
+            <Route path="/netflix" element={<Layout><NetflixParty /></Layout>} />
+            <Route path="/netflix-party" element={<Layout><NetflixParty /></Layout>} />
             <Route path="/login" element={<Layout><Login /></Layout>} />
             <Route path="/privacy" element={<Layout><PrivacyPolicy /></Layout>} />
             <Route path="/terms" element={<Layout><TermsOfService /></Layout>} />
