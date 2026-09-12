@@ -490,7 +490,7 @@ export const WatchParty = () => {
       const now = Date.now();
       const recent = snapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() } as WatchRoomReaction))
-        .filter(r => !r.time || (now - new Date(r.time).getTime() < 6000));
+        .filter(r => !r.time || (now - new Date(r.time).getTime() < 8500));
       setReactions(recent);
     }, (error) => {
       console.warn("Reactions listener error:", error);
@@ -1827,7 +1827,7 @@ export const WatchParty = () => {
               <ArrowLeft size={20} />
             </Link>
             <div className="flex flex-col">
-              <h1 className="text-[11px] sm:text-xs font-semibold text-white truncate max-w-[130px] sm:max-w-[220px] md:max-w-md">{room.title}</h1>
+              <h1 className="text-[10px] sm:text-[11px] font-semibold text-white truncate max-w-[130px] sm:max-w-[220px] md:max-w-md">{room.title}</h1>
               <div className="flex items-center gap-2 text-[8px] sm:text-[9px] text-gray-500 uppercase tracking-widest font-semibold">
                 <span className="flex items-center gap-1.5 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -1901,6 +1901,7 @@ export const WatchParty = () => {
                 isScreenSharingActive={Boolean(room?.isScreenSharing)}
                 hostId={room?.screenHostId || room?.hostId}
                 onStreamReady={handleScreenStream} 
+                onToast={showToast}
               />
             )}
             <button 
@@ -2025,7 +2026,7 @@ export const WatchParty = () => {
                     </div>
                     <div>
                       <h3 className="text-sm sm:text-base font-bold text-white">Screen Share Mode Active</h3>
-                      <p className="text-xs text-gray-400 mt-1 max-w-sm">Tap "Share Screen" in the bar above to share your mobile screen, app, or camera.</p>
+                      <p className="text-xs text-gray-400 mt-1 max-w-sm">Tap "Share Screen" in the bar above to broadcast your screen to the room.</p>
                     </div>
                   </div>
                 ) : (
@@ -2320,13 +2321,13 @@ export const WatchParty = () => {
                     key={reaction.id}
                     initial={{ y: 0, x: getXPos(reaction.id), opacity: 0, scale: 0.6 }}
                     animate={{ 
-                      y: ['0px', '-60px', '-160px', '-260px'], 
+                      y: ['0px', '-50px', '-140px', '-230px'], 
                       opacity: [0, 1, 1, 0.7, 0], 
-                      scale: [0.6, 1.2, 1.15, 1.0, 0.85] 
+                      scale: [0.6, 1.15, 1.1, 0.95, 0.8] 
                     }}
                     exit={{ opacity: 0 }}
-                    transition={{ duration: 3.5, ease: "easeInOut" }}
-                    className="absolute bottom-6 text-2xl sm:text-3xl filter drop-shadow select-none"
+                    transition={{ duration: 6.5, ease: "easeInOut" }}
+                    className="absolute bottom-6 text-xl sm:text-2xl filter drop-shadow select-none"
                   >
                     {reaction.emoji}
                   </motion.div>
@@ -2377,7 +2378,7 @@ export const WatchParty = () => {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 bg-white/5 lg:bg-transparent p-3 sm:p-4 lg:p-0 rounded-2xl border border-white/5 lg:border-0">
             <div className="space-y-0.5 sm:space-y-1">
               <div className="flex items-center gap-2 sm:gap-3">
-                <h2 className="text-base sm:text-lg font-bold text-white">{room.title}</h2>
+                <h2 className="text-sm sm:text-base font-bold text-white">{room.title}</h2>
                 {isHost && (
                   <button 
                     onClick={() => setIsChangeMovieModalOpen(true)}
@@ -2398,7 +2399,7 @@ export const WatchParty = () => {
                   </button>
                 )}
               </div>
-              <p className="text-gray-500 text-xs">Hosted by <span className="text-emerald-500 font-semibold">{room.hostName}</span></p>
+              <p className="text-gray-400 text-[11px]">Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span></p>
             </div>
             
             <div className="flex items-center gap-1 sm:gap-2 bg-white/5 p-1.5 sm:p-2 rounded-2xl border border-white/5">
@@ -2505,12 +2506,12 @@ export const WatchParty = () => {
                 {messages.map((msg) => (
                   <div key={msg.id} className="flex flex-col gap-0.5 sm:gap-1">
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-[11px] sm:text-xs font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
+                      <span className={`text-[10px] sm:text-[11px] font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
                         {msg.username}
                       </span>
                       <span className="text-[8px] sm:text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
-                    <p className="text-xs sm:text-sm text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl rounded-tl-none border border-white/5 leading-relaxed">
+                    <p className="text-[11px] sm:text-xs text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl rounded-tl-none border border-white/5 leading-relaxed">
                       {msg.text}
                     </p>
                   </div>

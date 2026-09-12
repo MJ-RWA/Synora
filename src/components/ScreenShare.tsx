@@ -13,6 +13,7 @@ export interface ScreenShareProps {
   hostId?: string | null;
   onStreamReady?: (stream: MediaStream | null) => void;
   onSharingStateChange?: (isSharing: boolean) => void;
+  onToast?: (message: string) => void;
 }
 
 const getIceServers = (): RTCConfiguration => {
@@ -52,7 +53,8 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
   isScreenSharingActive = false,
   hostId,
   onStreamReady,
-  onSharingStateChange
+  onSharingStateChange,
+  onToast
 }) => {
   const [isSharing, setIsSharing] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -520,83 +522,106 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
       (navigator.maxTouchPoints && navigator.maxTouchPoints > 1)
     );
 
-    const hasGetDisplayMedia = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia);
-    const hasGetUserMedia = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
-
-    if (!hasGetDisplayMedia && !hasGetUserMedia) {
-      setError('Screen/camera sharing is not supported in this browser. Please try Chrome or Safari.');
+    // Screen sharing requires getDisplayMedia (never getUserMedia/camera)
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      const msg = isMobile
+        ? 'Screen broadcasting is not supported by your mobile browser. Please use Chrome on a desktop or laptop to share your screen.'
+        : 'Screen sharing is not supported in this browser. Please use Chrome, Edge, or Firefox.';
+      setError(msg);
+      if (onToast) onToast(msg);
       return;
     }
 
     try {
       let stream: MediaStream | null = null;
 
-      if (hasGetDisplayMedia) {
-        if (isMobile) {
-          // Mobile devices (Android Chrome, iOS Safari 13+):
-          // Avoid constraints like displaySurface: 'monitor' or audio: true which cause OverconstrainedError on mobile
+      if (isMobile) {
+        // Mobile browsers (Android Chrome 125+, iOS 17.2+):
+        // Explicitly request displaySurface: 'monitor' with audio: false
+        // This directs mobile OS to system screen capture and avoids camera delegation
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              displaySurface: 'monitor',
+            } as MediaTrackConstraints,
+            audio: false,
+          });
+        } catch (mobileErr: unknown) {
+          const mErr = mobileErr as { name?: string };
+          if (mErr?.name === 'NotAllowedError' || mErr?.name === 'AbortError') {
+            console.log('[ScreenShare] User dismissed screen share prompt on mobile.');
+            return;
+          }
+          // Fallback to simple { video: true } or parameterless getDisplayMedia
           try {
             stream = await navigator.mediaDevices.getDisplayMedia({
               video: true,
             });
-          } catch (mobileErr: unknown) {
-            const mErr = mobileErr as { name?: string };
-            if (mErr?.name === 'NotAllowedError' || mErr?.name === 'AbortError') {
-              console.log('[ScreenShare] Screen share prompt dismissed on mobile.');
+          } catch (retryErr: unknown) {
+            const rErr = retryErr as { name?: string };
+            if (rErr?.name === 'NotAllowedError' || rErr?.name === 'AbortError') {
               return;
             }
-            console.warn('[ScreenShare] getDisplayMedia({ video: true }) failed on mobile, attempting frameRate fallback:', mobileErr);
+            // Final fallback to parameterless
             try {
-              stream = await navigator.mediaDevices.getDisplayMedia({
-                video: { frameRate: { max: 30 } },
-              });
-            } catch (retryErr: unknown) {
-              const rErr = retryErr as { name?: string };
-              if (rErr?.name === 'NotAllowedError' || rErr?.name === 'AbortError') {
+              stream = await navigator.mediaDevices.getDisplayMedia();
+            } catch (finalErr: unknown) {
+              const fErr = finalErr as { name?: string };
+              if (fErr?.name === 'NotAllowedError' || fErr?.name === 'AbortError') {
                 return;
               }
-              // If getDisplayMedia is unsupported on this mobile webview/browser, offer live camera stream
-              if (hasGetUserMedia) {
-                console.warn('[ScreenShare] Falling back to camera stream on mobile:', retryErr);
-                stream = await navigator.mediaDevices.getUserMedia({
-                  video: { facingMode: 'user', width: { ideal: 1280 } },
-                  audio: true,
-                });
-              } else {
-                throw retryErr;
-              }
+              throw finalErr;
             }
-          }
-        } else {
-          // Desktop browsers: attempt display capture with system audio, fallback to video-only if audio rejected
-          try {
-            stream = await navigator.mediaDevices.getDisplayMedia({
-              video: {
-                frameRate: { ideal: 30, max: 30 },
-              },
-              audio: true,
-            });
-          } catch (desktopErr: unknown) {
-            const dErr = desktopErr as { name?: string };
-            if (dErr?.name === 'NotAllowedError' || dErr?.name === 'AbortError') {
-              return;
-            }
-            console.warn('[ScreenShare] Desktop getDisplayMedia with audio failed, retrying video only:', desktopErr);
-            stream = await navigator.mediaDevices.getDisplayMedia({
-              video: true,
-            });
           }
         }
-      } else if (hasGetUserMedia) {
-        // Fallback for mobile browsers lacking display capture API
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 } },
-          audio: true,
-        });
+      } else {
+        // Desktop browsers: capture with audio option, fallback to video-only if audio rejected
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              frameRate: { ideal: 30, max: 30 },
+            },
+            audio: true,
+          });
+        } catch (desktopErr: unknown) {
+          const dErr = desktopErr as { name?: string };
+          if (dErr?.name === 'NotAllowedError' || dErr?.name === 'AbortError') {
+            return;
+          }
+          console.warn('[ScreenShare] Desktop getDisplayMedia with audio failed, retrying video only:', desktopErr);
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+          });
+        }
       }
 
       if (!stream) {
-        throw new Error('Failed to acquire stream');
+        throw new Error('Failed to acquire screen stream');
+      }
+
+      // Safety check: ensure the browser provided actual screen display capture, NOT device rear/front camera
+      const videoTracks = stream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        const track = videoTracks[0];
+        const settings = track.getSettings ? track.getSettings() : {};
+        const label = (track.label || '').toLowerCase();
+        
+        // If facingMode is present (e.g. 'environment', 'user') or track is labeled camera/back/rear
+        if (
+          settings.facingMode ||
+          label.includes('camera') ||
+          label.includes('rear') ||
+          label.includes('back') ||
+          label.includes('facing back')
+        ) {
+          console.error('[ScreenShare] Browser provided camera track instead of screen capture:', label);
+          track.stop();
+          stream.getTracks().forEach(t => t.stop());
+          const msg = 'Mobile camera was triggered instead of screen broadcast. Please allow screen sharing in your mobile browser permissions.';
+          setError(msg);
+          if (onToast) onToast(msg);
+          return;
+        }
       }
 
       localStreamRef.current = stream;
@@ -666,9 +691,13 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
         return;
       }
       console.error('[ScreenShare] Error starting screen share:', err);
-      setError('Unable to start screen share. Please check device permissions and try again.');
+      const msg = isMobile
+        ? 'Screen broadcasting is not available on this mobile browser. Please share your screen using Chrome on desktop.'
+        : 'Unable to start screen share. Please check device permissions and try again.';
+      setError(msg);
+      if (onToast) onToast(msg);
     }
-  }, [cleanRoomId, myId, onSharingStateChange, onStreamReady, getOrCreatePeerConnection, stopSharing]);
+  }, [cleanRoomId, myId, onSharingStateChange, onStreamReady, getOrCreatePeerConnection, stopSharing, onToast]);
 
   // Re-request stream manual button for viewers
   const handleRefreshStream = useCallback(async () => {

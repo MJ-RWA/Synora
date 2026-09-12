@@ -18,6 +18,7 @@ import { Notifications } from './Notifications';
 import { WatchPartyModal } from './WatchPartyModal';
 import { JoinPartyModal } from './JoinPartyModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { ThemeToggle } from './ThemeToggle';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const Navbar = () => {
@@ -55,7 +56,7 @@ export const Navbar = () => {
                   }`}
                 >
                   <Radio size={15} className="text-emerald-400" />
-                  Live Rooms
+                  {user ? 'Dashboard' : 'Home'}
                 </Link>
 
                 <button
@@ -129,7 +130,10 @@ export const Navbar = () => {
             </div>
 
             {/* User Profile & Actions */}
-            <div className="flex items-center gap-2 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Theme Toggle Button */}
+              <ThemeToggle />
+
               {/* PWA Install Button (desktop) */}
               <div className="hidden sm:block">
                 <PWAInstallButton variant="navbar" />
@@ -212,7 +216,7 @@ export const Navbar = () => {
                     isActive('/') ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:bg-white/5'
                   }`}
                 >
-                  <Radio size={18} /> Live Rooms
+                  <Radio size={18} /> {user ? 'App Dashboard' : 'Home'}
                 </Link>
 
                 <button
@@ -288,6 +292,12 @@ export const Navbar = () => {
                     <LayoutDashboard size={18} /> Admin Dashboard
                   </Link>
                 )}
+
+                {/* Theme Mode Toggle in Mobile Menu */}
+                <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                  <span className="text-sm font-bold text-gray-300">Theme</span>
+                  <ThemeToggle showLabel={true} />
+                </div>
 
                 {/* Mobile PWA Install Button */}
                 <div className="pt-1 pb-1">

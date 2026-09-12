@@ -4,14 +4,39 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+:root {
+  --bg-primary: #050505;
+  --bg-secondary: #0a0a0a;
+  --bg-card: rgba(255, 255, 255, 0.03);
+  --bg-surface: #121212;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --text-main: #ffffff;
+  --text-muted: #9ca3af;
+  --nav-bg: rgba(0, 0, 0, 0.92);
+  color-scheme: dark;
+}
+
+html.light {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-surface: #f1f5f9;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --nav-bg: rgba(255, 255, 255, 0.95);
+  color-scheme: light;
+}
+
 @layer base {
   body {
-    @apply bg-[#050505] text-white antialiased;
+    @apply bg-[#050505] text-white antialiased transition-colors duration-200;
   }
 
-  /* Custom Scrollbar */
+  /* Custom Scrollbar Dark */
   ::-webkit-scrollbar {
     width: 8px;
+    height: 8px;
   }
 
   ::-webkit-scrollbar-track {
@@ -21,6 +46,24 @@
   ::-webkit-scrollbar-thumb {
     @apply bg-white/10 rounded-full hover:bg-emerald-500/50 transition-colors;
   }
+
+  /* Light mode overrides */
+  html.light body {
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  html.light ::-webkit-scrollbar-track {
+    background-color: #f1f5f9;
+  }
+
+  html.light ::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+  }
+
+  html.light ::-webkit-scrollbar-thumb:hover {
+    background-color: #10b981;
+  }
 }
 
 @layer utilities {
@@ -28,4 +71,96 @@
     @apply bg-white/5 border border-white/10;
     backdrop-filter: blur(12px);
   }
+
+  html.light .glass-card {
+    background-color: rgba(255, 255, 255, 0.85);
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+}
+
+/* Global Light Theme Refinements */
+html.light .bg-\[\#050505\] {
+  background-color: #f8fafc !important;
+}
+
+html.light .bg-black {
+  background-color: #ffffff !important;
+}
+
+html.light .bg-black\/95,
+html.light .bg-black\/90,
+html.light .bg-black\/80,
+html.light .bg-black\/60 {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+html.light .bg-zinc-900 {
+  background-color: #f1f5f9 !important;
+}
+
+html.light .bg-zinc-950 {
+  background-color: #e2e8f0 !important;
+}
+
+html.light .border-white\/10 {
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+html.light .border-white\/5 {
+  border-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+html.light .border-white\/20 {
+  border-color: rgba(0, 0, 0, 0.16) !important;
+}
+
+html.light .text-white {
+  color: #0f172a !important;
+}
+
+html.light .text-gray-100,
+html.light .text-gray-200 {
+  color: #1e293b !important;
+}
+
+html.light .text-gray-300 {
+  color: #334155 !important;
+}
+
+html.light .text-gray-400 {
+  color: #64748b !important;
+}
+
+html.light .text-gray-500 {
+  color: #94a3b8 !important;
+}
+
+html.light .bg-white\/5 {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .bg-white\/\[0\.02\],
+html.light .bg-white\/\[0\.03\],
+html.light .bg-white\/\[0\.04\] {
+  background-color: #ffffff !important;
+}
+
+html.light .hover\:bg-white\/5:hover {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+html.light .hover\:bg-white\/10:hover {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light .from-emerald-950\/40 {
+  --tw-gradient-from: rgba(16, 185, 129, 0.12) !important;
+}
+
+html.light .to-black {
+  --tw-gradient-to: #ffffff !important;
+}
+
+html.light .via-zinc-900 {
+  --tw-gradient-stops: var(--tw-gradient-from), #f8fafc, var(--tw-gradient-to) !important;
 }

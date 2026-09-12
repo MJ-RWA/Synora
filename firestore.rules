@@ -351,10 +351,20 @@ service cloud.firestore {
             )
           )
         );
-      allow delete: if isAdmin() || (isAuthenticated() && (
-        request.auth.uid == resource.data.hostId || 
-        (('ownerId' in resource.data) && request.auth.uid == resource.data.ownerId)
-      ));
+      allow delete: if isAdmin() || 
+        (isAuthenticated() && (
+          request.auth.uid == resource.data.hostId || 
+          (('ownerId' in resource.data) && request.auth.uid == resource.data.ownerId)
+        )) ||
+        // Rule: Automatically allow deletion of public rooms inactive for 24 hours (86,400,000 ms)
+        (
+          (resource.data.isPrivate != true || resource.data.isPrivate == false) &&
+          (
+            ('updatedAt' in resource.data && resource.data.updatedAt is number && request.time.toMillis() - resource.data.updatedAt > 86400000) ||
+            ('lastActivity' in resource.data && resource.data.lastActivity is number && request.time.toMillis() - resource.data.lastActivity > 86400000) ||
+            ('createdAt' in resource.data && resource.data.createdAt is timestamp && request.time > resource.data.createdAt + duration.value(24, 'h'))
+          )
+        );
 
       match /messages/{messageId} {
         allow read: if canAccessWatchRoom(roomId);
