@@ -67,12 +67,16 @@ export const Notifications = () => {
   return (
     <div className="relative">
       <button
+        type="button"
+        id="notifications-bell-btn"
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 hover:bg-white/5 rounded-full text-gray-400 hover:text-white transition-all"
+        className="relative w-9 h-9 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/10 shadow-sm transition-all shrink-0"
+        title="Notifications"
+        aria-label="Notifications"
       >
-        <Bell size={20} />
+        <Bell size={18} />
         {unreadCount > 0 && (
-          <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-[#0f0f0f]">
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-black flex items-center justify-center rounded-full border-2 border-[#0f0f0f] shadow-sm">
             {unreadCount}
           </span>
         )}

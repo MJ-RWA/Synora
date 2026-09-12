@@ -4,6 +4,7 @@ import { Play, Pause, Volume2, VolumeX, AlertCircle, RefreshCw } from 'lucide-re
 interface YouTubeSyncPlayerProps {
   videoId: string;
   isHost: boolean;
+  isHostOnline?: boolean;
   roomPlaying?: boolean;
   roomCurrentTime?: number;
   roomUpdatedAt?: number;
@@ -61,6 +62,7 @@ export interface YTPlayerInstance {
 export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
   videoId,
   isHost,
+  isHostOnline = true,
   roomPlaying,
   roomCurrentTime,
   roomUpdatedAt,
@@ -91,7 +93,9 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
     isHostRef.current = isHost;
   });
 
-  const effectivePlaying = Boolean(roomPlaying ?? playing);
+  const effectivePlaying = isHost 
+    ? Boolean(roomPlaying ?? playing) 
+    : (isHostOnline !== false ? Boolean(roomPlaying ?? playing) : false);
   const effectiveCurrentTime = roomCurrentTime ?? currentTime ?? 0;
   const effectiveUpdatedAt = roomUpdatedAt ?? updatedAt ?? 0;
 
@@ -108,6 +112,20 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
       updatedAt: effectiveUpdatedAt
     };
   }, [effectivePlaying, effectiveCurrentTime, effectiveUpdatedAt]);
+
+  // Pause participant YouTube player immediately if host is offline
+  useEffect(() => {
+    if (isHost || isHostOnline !== false) return;
+    if (playerRef.current) {
+      try {
+        if (typeof playerRef.current.pauseVideo === 'function') {
+          playerRef.current.pauseVideo();
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [isHost, isHostOnline]);
 
   const handlePlaybackChange = useCallback((isPlayingState: boolean, time: number) => {
     setIsPlaying(isPlayingState);
@@ -169,6 +187,7 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
 
   const togglePlay = () => {
     if (!playerRef.current || !isPlayerReady) return;
+    if (!isHostRef.current && isHostOnline === false) return;
     const player = playerRef.current;
     if (typeof player.getCurrentTime !== 'function') return;
     const curTime = (() => {

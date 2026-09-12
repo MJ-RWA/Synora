@@ -537,12 +537,15 @@ export const ScreenShare: React.FC<ScreenShareProps> = ({
 
       if (isMobile) {
         // Mobile browsers (Android Chrome 125+, iOS 17.2+):
-        // Explicitly request displaySurface: 'monitor' with audio: false
-        // This directs mobile OS to system screen capture and avoids camera delegation
+        // Explicitly request displaySurface: 'monitor' with optimal 720p/30fps caps
+        // This directs mobile OS to system screen capture, prevents camera delegation, and preserves mobile responsiveness
         try {
           stream = await navigator.mediaDevices.getDisplayMedia({
             video: {
               displaySurface: 'monitor',
+              width: { ideal: 1280, max: 1280 },
+              height: { ideal: 720, max: 720 },
+              frameRate: { ideal: 24, max: 30 }
             } as MediaTrackConstraints,
             audio: false,
           });

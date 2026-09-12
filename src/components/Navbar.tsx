@@ -49,113 +49,106 @@ export const Navbar = () => {
               <div className="hidden md:flex items-center gap-1">
                 <Link 
                   to="/" 
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
                     isActive('/') 
-                      ? 'bg-emerald-600/10 text-emerald-400' 
+                      ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                       : 'text-gray-400 hover:text-white hover:bg-white/5'
                   }`}
                 >
-                  <Radio size={15} className="text-emerald-400" />
-                  {user ? 'Dashboard' : 'Home'}
+                  <Radio size={14} className="text-emerald-400 shrink-0" />
+                  <span>{user ? 'Dashboard' : 'Home'}</span>
                 </Link>
 
                 <button
                   type="button"
                   onClick={() => setIsCreateModalOpen(true)}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 text-gray-400 hover:text-white hover:bg-white/5 transition-all"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 text-gray-400 hover:text-white hover:bg-white/5 transition-all"
                 >
-                  <Sparkles size={15} className="text-emerald-400" />
-                  Create Room
+                  <Sparkles size={14} className="text-emerald-400 shrink-0" />
+                  <span>Create Room</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setIsJoinModalOpen(true)}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 text-gray-400 hover:text-white hover:bg-white/5 transition-all"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 text-gray-400 hover:text-white hover:bg-white/5 transition-all"
                 >
-                  <LogIn size={15} className="text-blue-400" />
-                  Join Room
+                  <LogIn size={14} className="text-blue-400 shrink-0" />
+                  <span>Join Room</span>
                 </button>
 
                 {user && (
                   <Link 
                     to="/friends" 
-                    className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
                       isActive('/friends') 
-                        ? 'bg-emerald-600/10 text-emerald-400' 
+                        ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                         : 'text-gray-400 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <Users size={15} />
-                    Friends
+                    <Users size={14} className="shrink-0" />
+                    <span>Friends</span>
                   </Link>
                 )}
 
                 <Link 
-                  to="/how-it-works" 
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                    isActive('/how-it-works') 
-                      ? 'bg-emerald-600/10 text-emerald-400' 
+                  to="/netflix" 
+                  className={`hidden lg:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all ${
+                    isActive('/netflix') || isActive('/netflix-party')
+                      ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                       : 'text-gray-400 hover:text-white hover:bg-white/5'
                   }`}
                 >
-                  <Cpu size={15} />
-                  How It Works
+                  <Tv size={14} className="shrink-0" />
+                  <span>Netflix</span>
                 </Link>
 
                 <Link 
-                  to="/netflix" 
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                    isActive('/netflix') || isActive('/netflix-party')
-                      ? 'bg-emerald-600/10 text-emerald-400' 
+                  to="/how-it-works" 
+                  className={`hidden xl:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all ${
+                    isActive('/how-it-works') 
+                      ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                       : 'text-gray-400 hover:text-white hover:bg-white/5'
                   }`}
                 >
-                  <Tv size={15} />
-                  Netflix Party
+                  <Cpu size={14} className="shrink-0" />
+                  <span>How It Works</span>
                 </Link>
 
                 <Link 
                   to="/support" 
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                  className={`hidden xl:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all ${
                     isActive('/support') 
-                      ? 'bg-emerald-600/10 text-emerald-400' 
+                      ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                       : 'text-gray-400 hover:text-white hover:bg-white/5'
                   }`}
                 >
-                  <Coffee size={15} />
-                  Support
+                  <Coffee size={14} className="shrink-0" />
+                  <span>Support</span>
                 </Link>
               </div>
             </div>
 
-            {/* User Profile & Actions */}
-            <div className="flex items-center gap-2 sm:gap-3">
+            {/* User Profile & Actions Bar */}
+            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
               {/* Theme Toggle Button */}
-              <ThemeToggle />
+              <ThemeToggle className="w-9 h-9 p-0 flex items-center justify-center shrink-0" />
 
               {/* PWA Install Button (desktop) */}
-              <div className="hidden sm:block">
+              <div className="hidden lg:block shrink-0">
                 <PWAInstallButton variant="navbar" />
               </div>
 
-              {/* Quick Create CTA for desktop */}
-              <button
-                type="button"
-                onClick={() => setIsCreateModalOpen(true)}
-                className="hidden xl:inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40"
-              >
-                <Sparkles size={14} /> New Party
-              </button>
-
               {user ? (
-                <div className="flex items-center gap-2 sm:gap-3">
+                <>
+                  <div className="hidden sm:block h-5 w-px bg-white/10 shrink-0 mx-0.5" />
+
                   <Notifications />
                   
                   {isAdmin && (
                     <Link 
                       to="/admin" 
-                      className="hidden sm:flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-2.5 py-1.5 rounded-lg border border-emerald-500/30 transition-all text-[10px] font-black uppercase tracking-widest"
+                      className="hidden xl:flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-2.5 py-1.5 rounded-lg border border-emerald-500/30 transition-all text-[10px] font-black uppercase tracking-widest shrink-0"
                     >
                       <LayoutDashboard size={13} /> Admin
                     </Link>
@@ -163,25 +156,28 @@ export const Navbar = () => {
 
                   <Link 
                     to="/profile" 
-                    className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-black shadow-md shadow-emerald-900/20 hover:scale-105 transition-transform text-xs"
+                    className="w-9 h-9 rounded-xl bg-emerald-600 hover:bg-emerald-500 flex items-center justify-center text-white font-black shadow-md shadow-emerald-950/20 hover:scale-105 transition-all text-xs shrink-0"
                     title="Your Profile"
+                    aria-label="Your Profile"
                   >
                     {user.displayName?.[0] || 'U'}
                   </Link>
 
                   <button 
+                    type="button"
                     onClick={logout} 
-                    className="text-gray-400 hover:text-red-400 p-1.5 transition-colors"
+                    className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-colors shrink-0"
                     title="Logout"
+                    aria-label="Logout"
                   >
-                    <LogOut size={18} />
+                    <LogOut size={16} />
                   </button>
-                </div>
+                </>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <Link 
                     to="/login"
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-900/20"
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-emerald-900/20 shrink-0"
                   >
                     <LogIn size={14} /> Login
                   </Link>

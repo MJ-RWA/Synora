@@ -79,8 +79,24 @@ html.light {
 }
 
 /* Global Light Theme Refinements */
-html.light .bg-\[\#050505\] {
+html.light .bg-\[\#050505\],
+html.light .bg-\[\#0f0f0f\] {
   background-color: #f8fafc !important;
+}
+
+html.light .bg-\[\#0f0f0f\]\/80 {
+  background-color: rgba(248, 250, 252, 0.85) !important;
+}
+
+html.light .bg-\[\#0f0f0f\]\/95 {
+  background-color: rgba(248, 250, 252, 0.95) !important;
+}
+
+html.light .bg-\[\#141414\],
+html.light .bg-\[\#121212\],
+html.light .bg-\[\#0a0a0a\],
+html.light .bg-\[\#18181b\] {
+  background-color: #ffffff !important;
 }
 
 html.light .bg-black {
@@ -88,10 +104,17 @@ html.light .bg-black {
 }
 
 html.light .bg-black\/95,
-html.light .bg-black\/90,
-html.light .bg-black\/80,
-html.light .bg-black\/60 {
+html.light .bg-black\/90 {
   background-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+/* Modal and dialog scrims should remain dark transluscent overlays */
+html.light .fixed.inset-0.bg-black\/85,
+html.light .fixed.inset-0.bg-black\/80,
+html.light .fixed.inset-0.bg-black\/90,
+html.light .fixed.inset-0.bg-black\/75,
+html.light .fixed.inset-0.bg-black\/70 {
+  background-color: rgba(15, 23, 42, 0.6) !important;
 }
 
 html.light .bg-zinc-900 {
@@ -102,20 +125,38 @@ html.light .bg-zinc-950 {
   background-color: #e2e8f0 !important;
 }
 
+html.light .bg-zinc-800 {
+  background-color: #e2e8f0 !important;
+}
+
 html.light .border-white\/10 {
-  border-color: rgba(0, 0, 0, 0.1) !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
 }
 
 html.light .border-white\/5 {
-  border-color: rgba(0, 0, 0, 0.06) !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
 }
 
 html.light .border-white\/20 {
-  border-color: rgba(0, 0, 0, 0.16) !important;
+  border-color: rgba(0, 0, 0, 0.18) !important;
 }
 
 html.light .text-white {
   color: #0f172a !important;
+}
+
+/* Ensure saturated action buttons and pills maintain crisp white text in light mode */
+html.light .bg-emerald-600,
+html.light .bg-emerald-500,
+html.light .bg-blue-600,
+html.light .bg-red-600,
+html.light .bg-purple-600,
+html.light .bg-emerald-600 *,
+html.light .bg-emerald-500 *,
+html.light .bg-blue-600 *,
+html.light .bg-red-600 *,
+html.light .bg-purple-600 * {
+  color: #ffffff !important;
 }
 
 html.light .text-gray-100,
@@ -132,25 +173,63 @@ html.light .text-gray-400 {
 }
 
 html.light .text-gray-500 {
-  color: #94a3b8 !important;
+  color: #64748b !important;
 }
 
 html.light .bg-white\/5 {
   background-color: rgba(0, 0, 0, 0.04) !important;
 }
 
+html.light .bg-white\/10 {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
 html.light .bg-white\/\[0\.02\],
 html.light .bg-white\/\[0\.03\],
-html.light .bg-white\/\[0\.04\] {
+html.light .bg-white\/\[0\.04\],
+html.light .bg-white\/\[0\.05\] {
   background-color: #ffffff !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
 }
 
 html.light .hover\:bg-white\/5:hover {
-  background-color: rgba(0, 0, 0, 0.05) !important;
+  background-color: rgba(0, 0, 0, 0.06) !important;
 }
 
 html.light .hover\:bg-white\/10:hover {
-  background-color: rgba(0, 0, 0, 0.08) !important;
+  background-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+html.light .hover\:text-white:hover {
+  color: #0f172a !important;
+}
+
+/* Ensure crisp contrast for icons and buttons in light mode */
+html.light svg {
+  stroke-width: 2.1;
+}
+
+html.light .text-gray-400 svg,
+html.light .text-gray-500 svg {
+  color: #475569 !important;
+}
+
+/* Ensure navbar in light mode has crisp appearance */
+html.light nav {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* Ensure mobile bottom navigation bar is crisp in light mode */
+html.light .fixed.bottom-0.bg-\[\#0a0a0a\]\/95 {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border-top-color: rgba(0, 0, 0, 0.1) !important;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
+}
+
+html.light .fixed.bottom-0.bg-\[\#0a0a0a\]\/95 .text-gray-400 {
+  color: #475569 !important;
 }
 
 html.light .from-emerald-950\/40 {
@@ -163,4 +242,36 @@ html.light .to-black {
 
 html.light .via-zinc-900 {
   --tw-gradient-stops: var(--tw-gradient-from), #f8fafc, var(--tw-gradient-to) !important;
+}
+
+html.light input,
+html.light textarea,
+html.light select {
+  color: #0f172a !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Maintain cinematic immersive black for video playback container across all themes */
+html.light #video-player-stage,
+html.light #video-player-stage video,
+html.light #video-player-stage iframe,
+html.light #video-player-stage [data-video-stage="true"] {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+html.light #video-player-stage .text-white {
+  color: #ffffff !important;
+}
+
+html.light #video-player-stage .text-gray-400 {
+  color: #9ca3af !important;
+}
+
+html.light #video-player-stage .text-gray-300 {
+  color: #d1d5db !important;
 }

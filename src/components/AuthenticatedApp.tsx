@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Radio, 
   Sparkles, 
@@ -25,7 +25,7 @@ import {
   ShieldCheck 
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
-import { collection, query, where, onSnapshot, getDocs, doc, getDoc, updateDoc, deleteDoc, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, doc, getDoc, updateDoc, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../hooks/useAuth';
 import { WatchRoom } from '../types';
@@ -34,18 +34,40 @@ import { JoinPartyModal } from './JoinPartyModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 import { PaginationControls } from './PaginationControls';
-import { isRoomInactiveFor24Hours } from '../services/roomCleanup';
+import { 
+  isRoomInactiveFor24Hours, 
+  purgeRoomFromLocalState, 
+  isRoomDeletedLocally, 
+  deleteRoomPermanently 
+} from '../services/roomCleanup';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const CACHE_KEY_ACTIVE = 'synora_cache_active_rooms';
+const CACHE_KEY_MY = 'synora_cache_my_rooms';
+
+const loadCachedRooms = (key: string): WatchRoom[] => {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((r: WatchRoom) => r && r.id && !isRoomDeletedLocally(r.id) && !r.isDeleted);
+    }
+    return [];
+  } catch {
+    return [];
+  }
+};
 
 export const AuthenticatedApp: React.FC = () => {
   const { user, userData, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
 
-  // State
-  const [activeRooms, setActiveRooms] = useState<WatchRoom[]>([]);
-  const [myWatchParties, setMyWatchParties] = useState<WatchRoom[]>([]);
-  const [isLoadingRooms, setIsLoadingRooms] = useState(true);
-  const [isLoadingMyRooms, setIsLoadingMyRooms] = useState(true);
+  // Instant State Initialization from Local Cache for 0ms First Paint
+  const [activeRooms, setActiveRooms] = useState<WatchRoom[]>(() => loadCachedRooms(CACHE_KEY_ACTIVE));
+  const [myWatchParties, setMyWatchParties] = useState<WatchRoom[]>(() => loadCachedRooms(CACHE_KEY_MY));
+  const [isLoadingRooms, setIsLoadingRooms] = useState(() => loadCachedRooms(CACHE_KEY_ACTIVE).length === 0);
+  const [isLoadingMyRooms, setIsLoadingMyRooms] = useState(() => loadCachedRooms(CACHE_KEY_MY).length === 0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Modals & Navigation
@@ -61,12 +83,14 @@ export const AuthenticatedApp: React.FC = () => {
   const [copiedRoomId, setCopiedRoomId] = useState<string | null>(null);
 
   // Pagination State
+  const [allPage, setAllPage] = useState(1);
   const [myPage, setMyPage] = useState(1);
   const [activePage, setActivePage] = useState(1);
   const [pageSize, setPageSize] = useState(6);
 
   // Reset pagination when search query or tab changes
   useEffect(() => {
+    setAllPage(1);
     setMyPage(1);
     setActivePage(1);
   }, [searchQuery, selectedTab]);
@@ -77,67 +101,96 @@ export const AuthenticatedApp: React.FC = () => {
   const minutes = totalMinutes % 60;
   const watchTimeFormatted = `${hours}h ${minutes}m`;
 
-  // Fetch User's Created/Saved Rooms
+  // Fetch User's Created/Saved Rooms with High Performance Concurrent Queries
   const fetchAllUserRooms = useCallback(async () => {
-    setIsLoadingMyRooms(true);
+    // Only show loading if we don't already have rooms in memory/cache
+    setIsLoadingMyRooms(prev => myWatchParties.length === 0 ? true : prev);
     try {
       const foundRooms: Map<string, WatchRoom> = new Map();
 
-      // 1. Check localStorage for rooms saved / created by user on this client
+      // 1. Check localStorage candidate IDs
+      let candidateIds: string[] = [];
       try {
         const savedIdsRaw = localStorage.getItem('synora_saved_room_ids');
         const savedIds: string[] = savedIdsRaw ? JSON.parse(savedIdsRaw) : [];
-        
         const createdRoomsRaw = localStorage.getItem('synora_created_rooms');
-        const createdRooms: WatchRoom[] = createdRoomsRaw ? JSON.parse(createdRoomsRaw) : [];
-        createdRooms.forEach(r => {
-          if (r && r.id) foundRooms.set(r.id, r);
-        });
-
-        if (savedIds.length > 0) {
-          for (const rId of savedIds.slice(0, 15)) {
-            if (!foundRooms.has(rId)) {
-              try {
-                const rSnap = await getDoc(doc(db, 'watchRooms', rId));
-                if (rSnap.exists()) {
-                  foundRooms.set(rId, { id: rSnap.id, ...rSnap.data() } as WatchRoom);
-                }
-              } catch (err) {
-                console.warn(`Could not fetch saved room ${rId}:`, err);
-              }
-            }
-          }
-        }
+        const createdRooms: Array<{ id: string }> = createdRoomsRaw ? JSON.parse(createdRoomsRaw) : [];
+        candidateIds = Array.from(new Set([
+          ...savedIds,
+          ...createdRooms.map(r => r?.id).filter(Boolean)
+        ])).filter(id => !isRoomDeletedLocally(id)).slice(0, 12);
       } catch (localErr) {
         console.warn('Error reading local saved rooms:', localErr);
       }
 
-      // 2. Query Firestore for rooms where user is hostId or ownerId
-      if (user?.uid) {
+      // 2. Parallel candidate verification
+      const candidatePromises = candidateIds.map(async (rId) => {
         try {
-          const hostQuery = query(
-            collection(db, 'watchRooms'),
-            where('hostId', '==', user.uid)
-          );
-          const hostSnap = await getDocs(hostQuery);
-          hostSnap.forEach(docSnap => {
-            foundRooms.set(docSnap.id, { id: docSnap.id, ...docSnap.data() } as WatchRoom);
-          });
-
-          const ownerQuery = query(
-            collection(db, 'watchRooms'),
-            where('ownerId', '==', user.uid)
-          );
-          const ownerSnap = await getDocs(ownerQuery);
-          ownerSnap.forEach(docSnap => {
-            foundRooms.set(docSnap.id, { id: docSnap.id, ...docSnap.data() } as WatchRoom);
-          });
-        } catch (firestoreErr) {
-          console.warn('Error querying user rooms by hostId/ownerId:', firestoreErr);
+          const rSnap = await getDoc(doc(db, 'watchRooms', rId));
+          if (rSnap.exists()) {
+            const rData = { id: rSnap.id, ...rSnap.data() } as WatchRoom;
+            const isCreatedByMe = Boolean(user?.uid && (rData.hostId === user.uid || rData.ownerId === user.uid));
+            if (rData.isDeleted || rData.isActive === false || isRoomDeletedLocally(rId)) {
+              purgeRoomFromLocalState(rId);
+            } else if (isCreatedByMe) {
+              return rData;
+            }
+          } else {
+            purgeRoomFromLocalState(rId);
+          }
+        } catch (err) {
+          console.warn(`Could not verify candidate room ${rId}:`, err);
         }
+        return null;
+      });
+
+      // 3. Parallel Firestore host & owner queries
+      const hostPromise = user?.uid 
+        ? getDocs(query(collection(db, 'watchRooms'), where('hostId', '==', user.uid), limit(50)))
+        : Promise.resolve(null);
+      const ownerPromise = user?.uid 
+        ? getDocs(query(collection(db, 'watchRooms'), where('ownerId', '==', user.uid), limit(50)))
+        : Promise.resolve(null);
+
+      const [candidateResults, hostSnap, ownerSnap] = await Promise.all([
+        Promise.all(candidatePromises),
+        hostPromise.catch(err => { console.warn('Error fetching host rooms:', err); return null; }),
+        ownerPromise.catch(err => { console.warn('Error fetching owner rooms:', err); return null; })
+      ]);
+
+      candidateResults.forEach(r => {
+        if (r) foundRooms.set(r.id, r);
+      });
+
+      if (hostSnap) {
+        hostSnap.forEach(docSnap => {
+          const data = { id: docSnap.id, ...docSnap.data() } as WatchRoom;
+          if (!isRoomDeletedLocally(docSnap.id) && !data.isDeleted && data.isActive !== false) {
+            foundRooms.set(docSnap.id, data);
+          } else if (isRoomDeletedLocally(docSnap.id) || data.isDeleted || data.isActive === false) {
+            purgeRoomFromLocalState(docSnap.id);
+          }
+        });
       }
 
-      const roomsList = Array.from(foundRooms.values());
+      if (ownerSnap) {
+        ownerSnap.forEach(docSnap => {
+          const data = { id: docSnap.id, ...docSnap.data() } as WatchRoom;
+          if (!isRoomDeletedLocally(docSnap.id) && !data.isDeleted && data.isActive !== false) {
+            foundRooms.set(docSnap.id, data);
+          } else if (isRoomDeletedLocally(docSnap.id) || data.isDeleted || data.isActive === false) {
+            purgeRoomFromLocalState(docSnap.id);
+          }
+        });
+      }
+
+      // Strictly filter to ensure every room in My Parties was created by the current user
+      const roomsList = Array.from(foundRooms.values()).filter(r => 
+        !isRoomDeletedLocally(r.id) && 
+        !r.isDeleted && 
+        r.isActive !== false &&
+        Boolean(user?.uid && (r.hostId === user.uid || r.ownerId === user.uid))
+      );
       roomsList.sort((a, b) => {
         const timeA = a.updatedAt || a.createdAt || 0;
         const timeB = b.updatedAt || b.createdAt || 0;
@@ -145,18 +198,38 @@ export const AuthenticatedApp: React.FC = () => {
       });
 
       setMyWatchParties(roomsList);
+      try {
+        localStorage.setItem(CACHE_KEY_MY, JSON.stringify(roomsList.slice(0, 30)));
+      } catch (cacheErr) {
+        console.debug('Failed to cache my rooms:', cacheErr);
+      }
     } catch (err) {
       console.error('Error fetching my watch parties:', err);
     } finally {
       setIsLoadingMyRooms(false);
     }
-  }, [user?.uid]);
+  }, [user?.uid, myWatchParties.length]);
 
   // Real-time listener for user rooms
   useEffect(() => {
     fetchAllUserRooms();
 
-    if (!user?.uid) return;
+    // Listen to global window room deletion events for instant synchronization across components
+    const handleDeletedEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ roomId: string }>;
+      const deletedId = customEvent.detail?.roomId;
+      if (deletedId) {
+        setMyWatchParties(prev => prev.filter(r => r.id !== deletedId));
+        setActiveRooms(prev => prev.filter(r => r.id !== deletedId));
+      }
+    };
+    window.addEventListener('synora_room_deleted', handleDeletedEvent);
+
+    if (!user?.uid) {
+      return () => {
+        window.removeEventListener('synora_room_deleted', handleDeletedEvent);
+      };
+    }
 
     const qHost = query(
       collection(db, 'watchRooms'),
@@ -166,14 +239,36 @@ export const AuthenticatedApp: React.FC = () => {
     const unsubHost = onSnapshot(qHost, (snap) => {
       setMyWatchParties(prev => {
         const map = new Map(prev.map(r => [r.id, r]));
-        snap.forEach(d => {
-          map.set(d.id, { id: d.id, ...d.data() } as WatchRoom);
+        // Handle removals explicitly so deleted documents are instantly removed from UI
+        snap.docChanges().forEach(change => {
+          if (change.type === 'removed') {
+            map.delete(change.doc.id);
+            purgeRoomFromLocalState(change.doc.id);
+          }
         });
-        const list = Array.from(map.values());
+        snap.forEach(d => {
+          const data = { id: d.id, ...d.data() } as WatchRoom;
+          if (isRoomDeletedLocally(d.id) || data.isDeleted || data.isActive === false) {
+            map.delete(d.id);
+            purgeRoomFromLocalState(d.id);
+          } else {
+            map.set(d.id, data);
+          }
+        });
+        const list = Array.from(map.values()).filter(r => !isRoomDeletedLocally(r.id) && !r.isDeleted && r.isActive !== false);
         list.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+        try {
+          localStorage.setItem(CACHE_KEY_MY, JSON.stringify(list.slice(0, 30)));
+        } catch (cacheErr) {
+          console.debug('Failed to cache my rooms on host update:', cacheErr);
+        }
+        setIsLoadingMyRooms(false);
         return list;
       });
-    }, (err) => console.warn('Error in host listener:', err));
+    }, (err) => {
+      console.warn('Error in host listener:', err);
+      setIsLoadingMyRooms(false);
+    });
 
     const qOwner = query(
       collection(db, 'watchRooms'),
@@ -183,16 +278,38 @@ export const AuthenticatedApp: React.FC = () => {
     const unsubOwner = onSnapshot(qOwner, (snap) => {
       setMyWatchParties(prev => {
         const map = new Map(prev.map(r => [r.id, r]));
-        snap.forEach(d => {
-          map.set(d.id, { id: d.id, ...d.data() } as WatchRoom);
+        snap.docChanges().forEach(change => {
+          if (change.type === 'removed') {
+            map.delete(change.doc.id);
+            purgeRoomFromLocalState(change.doc.id);
+          }
         });
-        const list = Array.from(map.values());
+        snap.forEach(d => {
+          const data = { id: d.id, ...d.data() } as WatchRoom;
+          if (isRoomDeletedLocally(d.id) || data.isDeleted || data.isActive === false) {
+            map.delete(d.id);
+            purgeRoomFromLocalState(d.id);
+          } else {
+            map.set(d.id, data);
+          }
+        });
+        const list = Array.from(map.values()).filter(r => !isRoomDeletedLocally(r.id) && !r.isDeleted && r.isActive !== false);
         list.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+        try {
+          localStorage.setItem(CACHE_KEY_MY, JSON.stringify(list.slice(0, 30)));
+        } catch (cacheErr) {
+          console.debug('Failed to cache my rooms on owner update:', cacheErr);
+        }
+        setIsLoadingMyRooms(false);
         return list;
       });
-    }, (err) => console.warn('Error in owner listener:', err));
+    }, (err) => {
+      console.warn('Error in owner listener:', err);
+      setIsLoadingMyRooms(false);
+    });
 
     return () => {
+      window.removeEventListener('synora_room_deleted', handleDeletedEvent);
       unsubHost();
       unsubOwner();
     };
@@ -200,21 +317,30 @@ export const AuthenticatedApp: React.FC = () => {
 
   // Real-time listener for active rooms (public only, visible strictly to authenticated users)
   useEffect(() => {
-    setIsLoadingRooms(true);
+    // Only set loading if no cached active rooms exist
+    setIsLoadingRooms(prev => activeRooms.length === 0 ? true : prev);
     const q = query(
       collection(db, 'watchRooms'),
       where('isActive', '==', true),
       where('isPrivate', '==', false),
-      limit(20)
+      limit(100)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rooms: WatchRoom[] = [];
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'removed') {
+          purgeRoomFromLocalState(change.doc.id);
+        }
+      });
       snapshot.forEach((docSnap) => {
         const roomData = { id: docSnap.id, ...docSnap.data() } as WatchRoom;
+        if (isRoomDeletedLocally(docSnap.id) || roomData.isDeleted) {
+          return;
+        }
         if (isRoomInactiveFor24Hours(roomData)) {
           // Automatically delete public rooms inactive for 24+ hours
-          deleteDoc(doc(db, 'watchRooms', docSnap.id)).catch((err) => {
+          deleteRoomPermanently(docSnap.id).catch((err) => {
             console.warn('[AutoClean] Could not delete inactive room:', docSnap.id, err);
           });
         } else {
@@ -223,6 +349,11 @@ export const AuthenticatedApp: React.FC = () => {
       });
       rooms.sort((a, b) => (b.lastActivity || b.updatedAt || 0) - (a.lastActivity || a.updatedAt || 0));
       setActiveRooms(rooms);
+      try {
+        localStorage.setItem(CACHE_KEY_ACTIVE, JSON.stringify(rooms.slice(0, 30)));
+      } catch (cacheErr) {
+        console.debug('Failed to cache active rooms:', cacheErr);
+      }
       setIsLoadingRooms(false);
     }, (err) => {
       console.error("Firestore rooms subscription error:", err);
@@ -230,7 +361,7 @@ export const AuthenticatedApp: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [activeRooms.length]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -275,66 +406,117 @@ export const AuthenticatedApp: React.FC = () => {
     }
   };
 
+  // Instant room deletion: immediately removes from UI with 0ms lag, cleans local storage, and deletes from Firestore
+  const handleDeleteRoomInstantly = async (roomItem: WatchRoom, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    const roomId = roomItem.id;
+
+    // 1. Optimistic instant removal from UI - immediate feedback
+    setMyWatchParties(prev => prev.filter(r => r.id !== roomId));
+    setActiveRooms(prev => prev.filter(r => r.id !== roomId));
+    if (roomToDelete?.id === roomId) {
+      setRoomToDelete(null);
+    }
+
+    // 2. Instant local storage purge & broadcast
+    purgeRoomFromLocalState(roomId);
+
+    // 3. Fire-and-forget remote permanent deletion
+    deleteRoomPermanently(roomId).catch(err => {
+      console.warn("Permanent deletion background error:", err);
+    });
+  };
+
   const handleConfirmDeleteRoom = async () => {
     if (!roomToDelete) return;
     setIsDeleting(true);
     try {
-      await deleteDoc(doc(db, 'watchRooms', roomToDelete.id));
-
-      try {
-        const savedIdsRaw = localStorage.getItem('synora_saved_room_ids');
-        if (savedIdsRaw) {
-          const ids: string[] = JSON.parse(savedIdsRaw);
-          localStorage.setItem('synora_saved_room_ids', JSON.stringify(ids.filter(id => id !== roomToDelete.id)));
-        }
-        const createdRaw = localStorage.getItem('synora_created_rooms');
-        if (createdRaw) {
-          const rooms: WatchRoom[] = JSON.parse(createdRaw);
-          localStorage.setItem('synora_created_rooms', JSON.stringify(rooms.filter(r => r.id !== roomToDelete.id)));
-        }
-      } catch (storageErr) {
-        console.warn("Error cleaning local room storage:", storageErr);
-      }
-
-      setMyWatchParties(prev => prev.filter(r => r.id !== roomToDelete.id));
-      setActiveRooms(prev => prev.filter(r => r.id !== roomToDelete.id));
-      setRoomToDelete(null);
-    } catch (err) {
-      console.error("Failed to delete watch room:", err);
+      await handleDeleteRoomInstantly(roomToDelete);
     } finally {
       setIsDeleting(false);
+      setRoomToDelete(null);
     }
   };
 
-  // Filtered lists based on search and tab
-  const filteredMyParties = myWatchParties.filter(room => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      (room.title && room.title.toLowerCase().includes(q)) ||
-      (room.hostName && room.hostName.toLowerCase().includes(q)) ||
-      (room.mediaType && room.mediaType.toLowerCase().includes(q)) ||
-      (room.mediaTitle && room.mediaTitle.toLowerCase().includes(q))
-    );
-  });
+  // Unified list of all unique watch parties (active public rooms + user's created/saved rooms)
+  const allWatchParties = useMemo(() => {
+    const map = new Map<string, WatchRoom>();
+    // First include active rooms
+    activeRooms.forEach(room => {
+      map.set(room.id, room);
+    });
+    // Then merge user's watch parties
+    myWatchParties.forEach(room => {
+      if (!map.has(room.id)) {
+        map.set(room.id, room);
+      } else {
+        const existing = map.get(room.id)!;
+        map.set(room.id, { ...existing, ...room, isActive: existing.isActive || room.isActive });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      return (b.lastActivity || b.updatedAt || 0) - (a.lastActivity || a.updatedAt || 0);
+    });
+  }, [activeRooms, myWatchParties]);
 
-  const filteredActiveRooms = activeRooms.filter(room => {
-    if (!searchQuery.trim()) return true;
+  // Filtered lists based on search and tab
+  const filteredAllParties = useMemo(() => {
+    if (!searchQuery.trim()) return allWatchParties;
     const q = searchQuery.toLowerCase();
-    return (
+    return allWatchParties.filter(room => (
       (room.title && room.title.toLowerCase().includes(q)) ||
       (room.hostName && room.hostName.toLowerCase().includes(q)) ||
       (room.mediaType && room.mediaType.toLowerCase().includes(q)) ||
       (room.mediaTitle && room.mediaTitle.toLowerCase().includes(q))
+    ));
+  }, [allWatchParties, searchQuery]);
+
+  const filteredMyParties = useMemo(() => {
+    // Strictly filter only rooms created by the current user
+    const createdByMe = myWatchParties.filter(room => 
+      Boolean(user?.uid && (room.hostId === user.uid || room.ownerId === user.uid))
     );
-  });
+    if (!searchQuery.trim()) return createdByMe;
+    const q = searchQuery.toLowerCase();
+    return createdByMe.filter(room => (
+      (room.title && room.title.toLowerCase().includes(q)) ||
+      (room.hostName && room.hostName.toLowerCase().includes(q)) ||
+      (room.mediaType && room.mediaType.toLowerCase().includes(q)) ||
+      (room.mediaTitle && room.mediaTitle.toLowerCase().includes(q))
+    ));
+  }, [myWatchParties, user?.uid, searchQuery]);
+
+  const filteredActiveRooms = useMemo(() => {
+    if (!searchQuery.trim()) return activeRooms;
+    const q = searchQuery.toLowerCase();
+    return activeRooms.filter(room => (
+      (room.title && room.title.toLowerCase().includes(q)) ||
+      (room.hostName && room.hostName.toLowerCase().includes(q)) ||
+      (room.mediaType && room.mediaType.toLowerCase().includes(q)) ||
+      (room.mediaTitle && room.mediaTitle.toLowerCase().includes(q))
+    ));
+  }, [activeRooms, searchQuery]);
 
   // Pagination slices & calculations
+  const totalAllPages = Math.ceil(filteredAllParties.length / pageSize) || 1;
+  const paginatedAllParties = useMemo(() => {
+    return filteredAllParties.slice((allPage - 1) * pageSize, allPage * pageSize);
+  }, [filteredAllParties, allPage, pageSize]);
+
   const totalMyPages = Math.ceil(filteredMyParties.length / pageSize) || 1;
-  const paginatedMyParties = filteredMyParties.slice((myPage - 1) * pageSize, myPage * pageSize);
+  const paginatedMyParties = useMemo(() => {
+    return filteredMyParties.slice((myPage - 1) * pageSize, myPage * pageSize);
+  }, [filteredMyParties, myPage, pageSize]);
 
   const totalActivePages = Math.ceil(filteredActiveRooms.length / pageSize) || 1;
-  const paginatedActiveRooms = filteredActiveRooms.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const paginatedActiveRooms = useMemo(() => {
+    return filteredActiveRooms.slice((activePage - 1) * pageSize, activePage * pageSize);
+  }, [filteredActiveRooms, activePage, pageSize]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8 pb-28 md:pb-12">
@@ -506,13 +688,16 @@ export const AuthenticatedApp: React.FC = () => {
         <div className="flex items-center gap-1.5 p-1 bg-white/5 rounded-2xl border border-white/5 self-start overflow-x-auto max-w-full">
           <button
             onClick={() => setSelectedTab('all')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
               selectedTab === 'all'
                 ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/30'
                 : 'text-gray-400 hover:text-white hover:bg-white/5'
             }`}
           >
-            All Parties ({myWatchParties.length + activeRooms.length})
+            <span>All Parties</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-black/40 text-[10px]">
+              {allWatchParties.length}
+            </span>
           </button>
 
           <button
@@ -566,8 +751,220 @@ export const AuthenticatedApp: React.FC = () => {
         </div>
       </div>
 
-      {/* SECTION 1: My Watch Parties */}
-      {(selectedTab === 'all' || selectedTab === 'my') && (
+      {/* SECTION 1: All Watch Parties (Unified view with dedicated pagination) */}
+      {selectedTab === 'all' && (
+        <section id="all-watch-parties" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold">
+                <Sparkles size={16} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                    All Watch Parties
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-gray-300">
+                    {filteredAllParties.length} available
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400">
+                  Browse all active streaming rooms and saved watch parties.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleManualRefresh}
+                className="text-xs font-bold text-gray-400 hover:text-white flex items-center gap-1 transition-colors"
+                title="Refresh rooms"
+              >
+                <RefreshCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+              <button
+                onClick={() => handleOpenCreateWithTab('embed')}
+                className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors"
+              >
+                <Plus size={14} /> Create Room
+              </button>
+            </div>
+          </div>
+
+          {(isLoadingRooms && isLoadingMyRooms && allWatchParties.length === 0) ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[1, 2, 3, 4, 5, 6].map((n) => (
+                <div key={n} className="h-44 rounded-3xl bg-white/[0.02] border border-white/5 animate-pulse" />
+              ))}
+            </div>
+          ) : filteredAllParties.length === 0 ? (
+            <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-8 sm:p-10 text-center space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-white/5 text-gray-400 flex items-center justify-center mx-auto">
+                <Tv size={24} />
+              </div>
+              <div className="max-w-md mx-auto space-y-1">
+                <h3 className="text-base font-bold text-white">
+                  {searchQuery ? 'No matching parties found' : 'No watch parties available'}
+                </h3>
+                <p className="text-xs text-gray-400">
+                  {searchQuery 
+                    ? 'Try searching for a different keyword or reset the search.'
+                    : 'Be the first to create a watch party and invite your friends!'}
+                </p>
+              </div>
+              <button
+                onClick={() => handleOpenCreateWithTab('embed')}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40 inline-flex items-center gap-2"
+              >
+                <Sparkles size={14} /> Start a Watch Party
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {paginatedAllParties.map((room) => {
+                  const isOwner = user?.uid === room.hostId || user?.uid === room.ownerId;
+                  const isCopied = copiedRoomId === room.id;
+
+                  return (
+                    <motion.div
+                      key={room.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className={`bg-white/[0.02] hover:bg-white/[0.04] border border-white/10 ${
+                        room.isActive ? 'hover:border-blue-500/30' : 'hover:border-emerald-500/30'
+                      } rounded-3xl p-5 sm:p-6 transition-all flex flex-col justify-between group shadow-lg`}
+                    >
+                      <div className="space-y-3">
+                        {/* Status Badges */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {room.isActive ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                                Live Now
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20 text-[10px] font-black uppercase tracking-wider">
+                                Saved Room
+                              </span>
+                            )}
+
+                            {room.isPrivate ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px] font-bold">
+                                <Lock size={10} /> Private
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-bold">
+                                <Globe size={10} /> Public
+                              </span>
+                            )}
+
+                            {isOwner && (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                                Your Room
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Delete Action Button (Owner only) - Automatically deletes and removes room instantly */}
+                          {isOwner && (
+                            <button
+                              id={`delete-room-btn-${room.id}`}
+                              onClick={(e) => handleDeleteRoomInstantly(room, e)}
+                              className="text-gray-400 hover:text-red-400 p-2 rounded-xl hover:bg-red-500/10 transition-colors group/del shrink-0"
+                              title="Delete Room Instantly"
+                              aria-label="Delete Room Instantly"
+                            >
+                              <Trash2 size={15} className="group-hover/del:scale-110 transition-transform" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Title & Media */}
+                        <div>
+                          <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-1">
+                            {room.title || 'Untitled Watch Party'}
+                          </h3>
+                          <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                            <Film size={12} className="text-emerald-400 shrink-0" />
+                            <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
+                          </p>
+                        </div>
+
+                        {/* Participants & Host Metadata */}
+                        <div className="pt-2 flex items-center justify-between text-xs text-gray-400 border-t border-white/5">
+                          <div className="flex items-center gap-1.5">
+                            <Users size={13} className="text-emerald-400" />
+                            <span>{room.participantCount || room.usersCount || 1} participant{(room.participantCount || room.usersCount || 1) !== 1 ? 's' : ''}</span>
+                          </div>
+
+                          {room.inviteCode ? (
+                            <div className="font-mono text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-md border border-white/5">
+                              Code: {room.inviteCode}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-500">
+                              Host: {room.hostName || 'Host'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Room Action Buttons */}
+                      <div className="mt-5 pt-3 border-t border-white/5 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (room.isActive) {
+                              navigate(`/watchparty/${room.id}`);
+                            } else {
+                              handleReopenParty(room);
+                            }
+                          }}
+                          className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-emerald-950/30 flex items-center justify-center gap-1.5"
+                        >
+                          <Play size={13} />
+                          <span>{room.isActive ? (isOwner ? 'Return to Room' : 'Enter Room') : 'Reopen Party'}</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => handleCopyLink(room.id, e)}
+                          className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
+                            isCopied 
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 
+                              : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
+                          }`}
+                          title="Copy Room Link"
+                        >
+                          {isCopied ? <Check size={15} /> : <Share2 size={15} />}
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              <PaginationControls
+                currentPage={allPage}
+                totalPages={totalAllPages}
+                totalItems={filteredAllParties.length}
+                pageSize={pageSize}
+                onPageChange={setAllPage}
+                onPageSizeChange={(newSize) => {
+                  setPageSize(newSize);
+                  setAllPage(1);
+                }}
+                itemName="watch parties"
+              />
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* SECTION 2: My Watch Parties */}
+      {selectedTab === 'my' && (
         <section id="my-watch-parties" className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -579,7 +976,7 @@ export const AuthenticatedApp: React.FC = () => {
                   My Watch Parties
                 </h2>
                 <p className="text-xs text-gray-400">
-                  Parties you hosted, configured, or saved to your account.
+                  Watch parties created by you.
                 </p>
               </div>
             </div>
@@ -592,7 +989,7 @@ export const AuthenticatedApp: React.FC = () => {
             </button>
           </div>
 
-          {isLoadingMyRooms ? (
+          {(isLoadingMyRooms && filteredMyParties.length === 0) ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1, 2, 3].map((n) => (
                 <div key={n} className="h-44 rounded-3xl bg-white/[0.02] border border-white/5 animate-pulse" />
@@ -624,106 +1021,124 @@ export const AuthenticatedApp: React.FC = () => {
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {paginatedMyParties.map((room) => {
-                const isOwner = user?.uid === room.hostId || user?.uid === room.ownerId;
-                const isCopied = copiedRoomId === room.id;
+                  const isOwner = user?.uid === room.hostId || user?.uid === room.ownerId;
+                  const isCopied = copiedRoomId === room.id;
 
-                return (
-                  <motion.div
-                    key={room.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="bg-white/[0.02] hover:bg-white/[0.04] border border-white/10 hover:border-emerald-500/30 rounded-3xl p-5 sm:p-6 transition-all flex flex-col justify-between group shadow-lg"
-                  >
-                    <div className="space-y-3">
-                      {/* Status Badges */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          {room.isActive ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                              Active Session
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20 text-[10px] font-black uppercase tracking-wider">
-                              Saved Room
-                            </span>
-                          )}
+                  return (
+                    <motion.div
+                      key={room.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="bg-white/[0.02] hover:bg-white/[0.04] border border-white/10 hover:border-emerald-500/30 rounded-3xl p-5 sm:p-6 transition-all flex flex-col justify-between group shadow-lg"
+                    >
+                      <div className="space-y-3">
+                        {/* Status Badges */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {room.isActive ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                                Live Now
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/20 text-[10px] font-black uppercase tracking-wider">
+                                Saved Room
+                              </span>
+                            )}
 
-                          {room.isPrivate ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px] font-bold">
-                              <Lock size={10} /> Private
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-bold">
-                              <Globe size={10} /> Public
-                            </span>
-                          )}
-                        </div>
+                            {room.isPrivate ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[10px] font-bold">
+                                <Lock size={10} /> Private
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-bold">
+                                <Globe size={10} /> Public
+                              </span>
+                            )}
 
-                        {/* Delete Action Button (Owner only) */}
-                        {isOwner && (
-                          <button
-                            onClick={() => setRoomToDelete(room)}
-                            className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
-                            title="Delete Room Permanently"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Title & Media */}
-                      <div>
-                        <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-1">
-                          {room.title || 'Untitled Watch Party'}
-                        </h3>
-                        <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
-                          <Film size={12} className="text-emerald-400 shrink-0" />
-                          <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
-                        </p>
-                      </div>
-
-                      {/* Participants & Metadata */}
-                      <div className="pt-2 flex items-center justify-between text-xs text-gray-400 border-t border-white/5">
-                        <div className="flex items-center gap-1.5">
-                          <Users size={13} className="text-gray-400" />
-                          <span>{room.participantCount || 1} participant{(room.participantCount || 1) !== 1 ? 's' : ''}</span>
-                        </div>
-
-                        {room.inviteCode && (
-                          <div className="font-mono text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-md border border-white/5">
-                            Code: {room.inviteCode}
+                            {isOwner && (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                                Your Room
+                              </span>
+                            )}
                           </div>
-                        )}
+
+                          {/* Delete Action Button (Owner only) - Automatically deletes and removes room instantly */}
+                          {isOwner && (
+                            <button
+                              id={`delete-room-btn-${room.id}`}
+                              onClick={(e) => handleDeleteRoomInstantly(room, e)}
+                              className="text-gray-400 hover:text-red-400 p-2 rounded-xl hover:bg-red-500/10 transition-colors group/del shrink-0"
+                              title="Delete Room Instantly"
+                              aria-label="Delete Room Instantly"
+                            >
+                              <Trash2 size={15} className="group-hover/del:scale-110 transition-transform" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Title & Media */}
+                        <div>
+                          <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-1">
+                            {room.title || 'Untitled Watch Party'}
+                          </h3>
+                          <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                            <Film size={12} className="text-emerald-400 shrink-0" />
+                            <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
+                          </p>
+                        </div>
+
+                        {/* Participants & Metadata */}
+                        <div className="pt-2 flex items-center justify-between text-xs text-gray-400 border-t border-white/5">
+                          <div className="flex items-center gap-1.5">
+                            <Users size={13} className="text-emerald-400" />
+                            <span>{room.participantCount || 1} participant{(room.participantCount || 1) !== 1 ? 's' : ''}</span>
+                          </div>
+
+                          {room.inviteCode ? (
+                            <div className="font-mono text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-md border border-white/5">
+                              Code: {room.inviteCode}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-gray-500">
+                              Host: {room.hostName || 'Host'}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Room Action Buttons */}
-                    <div className="mt-5 pt-3 border-t border-white/5 flex items-center gap-2">
-                      <button
-                        onClick={() => handleReopenParty(room)}
-                        className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-emerald-950/30 flex items-center justify-center gap-1.5"
-                      >
-                        <Play size={13} />
-                        <span>{room.isActive ? 'Return to Room' : 'Reopen Party'}</span>
-                      </button>
+                      {/* Room Action Buttons */}
+                      <div className="mt-5 pt-3 border-t border-white/5 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (room.isActive) {
+                              navigate(`/watchparty/${room.id}`);
+                            } else {
+                              handleReopenParty(room);
+                            }
+                          }}
+                          className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-emerald-950/30 flex items-center justify-center gap-1.5"
+                        >
+                          <Play size={13} />
+                          <span>{room.isActive ? (isOwner ? 'Return to Room' : 'Enter Room') : 'Reopen Party'}</span>
+                        </button>
 
-                      <button
-                        onClick={(e) => handleCopyLink(room.id, e)}
-                        className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
-                          isCopied 
-                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
-                        }`}
-                        title="Copy Room Link"
-                      >
-                        {isCopied ? <Check size={15} /> : <Share2 size={15} />}
-                      </button>
-                    </div>
-                  </motion.div>
-                );
-              })}
+                        <button
+                          onClick={(e) => handleCopyLink(room.id, e)}
+                          className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
+                            isCopied 
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 
+                              : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10'
+                          }`}
+                          title="Copy Room Link"
+                        >
+                          {isCopied ? <Check size={15} /> : <Share2 size={15} />}
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
 
               <PaginationControls
@@ -736,16 +1151,16 @@ export const AuthenticatedApp: React.FC = () => {
                   setPageSize(newSize);
                   setMyPage(1);
                 }}
-                itemName="watch parties"
+                itemName="my parties"
               />
             </div>
           )}
         </section>
       )}
 
-      {/* SECTION 2: Active Watch Parties (Strictly Authenticated Lobby) */}
-      {(selectedTab === 'all' || selectedTab === 'active') && (
-        <section id="active-watch-parties" className="space-y-4 pt-4">
+      {/* SECTION 3: Active Watch Parties (Strictly Authenticated Lobby) */}
+      {selectedTab === 'active' && (
+        <section id="active-watch-parties" className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold">
@@ -775,7 +1190,7 @@ export const AuthenticatedApp: React.FC = () => {
             </button>
           </div>
 
-          {isLoadingRooms ? (
+          {(isLoadingRooms && filteredActiveRooms.length === 0) ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {[1, 2, 3].map((n) => (
                 <div key={n} className="h-44 rounded-3xl bg-white/[0.02] border border-white/5 animate-pulse" />
@@ -822,15 +1237,29 @@ export const AuthenticatedApp: React.FC = () => {
                             Playing
                           </span>
 
-                          {isHost ? (
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
-                              Your Room
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-gray-400 font-medium">
-                              Host: {room.hostName || 'Streamer'}
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1.5">
+                            {isHost ? (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold">
+                                Your Room
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 font-medium">
+                                Host: {room.hostName || 'Streamer'}
+                              </span>
+                            )}
+
+                            {isHost && (
+                              <button
+                                id={`delete-room-btn-${room.id}`}
+                                onClick={(e) => handleDeleteRoomInstantly(room, e)}
+                                className="text-gray-400 hover:text-red-400 p-2 rounded-xl hover:bg-red-500/10 transition-colors group/del shrink-0"
+                                title="Delete Room Instantly"
+                                aria-label="Delete Room Instantly"
+                              >
+                                <Trash2 size={15} className="group-hover/del:scale-110 transition-transform" />
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {/* Title & Media */}

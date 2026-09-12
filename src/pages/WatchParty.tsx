@@ -7,15 +7,17 @@ import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
 import Hls from 'hls.js';
-import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2 } from 'lucide-react';
+import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
 import { YouTubeSyncPlayer } from '../components/YouTubeSyncPlayer';
 import { NetflixSyncCompanion } from '../components/NetflixSyncCompanion';
 import { SocialParticipantModal } from '../components/SocialParticipantModal';
+import { ThemeToggle } from '../components/ThemeToggle';
 import { recordWatchTime } from '../services/socialService';
 import { isUserLive, sendHeartbeat, markUserOffline, formatLastSeen, HEARTBEAT_INTERVAL_MS } from '../services/presenceService';
+import { purgeRoomFromLocalState, deleteRoomPermanently } from '../services/roomCleanup';
 
 // Helper to extract YouTube video ID if URL is YouTube
 const getYouTubeVideoId = (url?: string): string | null => {
@@ -62,6 +64,7 @@ export const WatchParty = () => {
   const [newMessage, setNewMessage] = useState('');
   const [reactions, setReactions] = useState<WatchRoomReaction[]>([]);
   const [allRoomUsers, setAllRoomUsers] = useState<WatchRoomUser[]>([]);
+  const [hasInitialUsersLoaded, setHasInitialUsersLoaded] = useState(false);
   const [presenceTick, setPresenceTick] = useState<number>(() => Date.now());
   const [activeSidebarTab, setActiveSidebarTab] = useState<'chat' | 'participants'>('chat');
 
@@ -81,11 +84,42 @@ export const WatchParty = () => {
     }, 3000);
     return () => clearInterval(tickInterval);
   }, []);
+
+  // Identify host participant from real-time participants subcollection
+  const hostParticipant = useMemo(() => {
+    if (!room) return null;
+    const hostId = room.hostId || room.ownerId;
+    return allRoomUsers.find(u => (hostId && (u.uid === hostId || u.id === hostId)) || u.isHost) || null;
+  }, [allRoomUsers, room]);
+
+  // Determine if host is live using the real-time presence system as source of truth
+  // The host themselves are always considered online in their own active session
+  const isHostOnline = useMemo(() => {
+    if (isHost) return true;
+    if (!room) return false;
+    // Before initial users snapshot has finished loading, avoid flashing offline immediately
+    if (!hasInitialUsersLoaded) return true;
+    if (!hostParticipant) return false;
+    return isUserLive(hostParticipant, presenceTick);
+  }, [isHost, room, hasInitialUsersLoaded, hostParticipant, presenceTick]);
+
+  // RULE: The host is the playback authority. If the host is offline, playback must be paused/stopped for everyone.
+  useEffect(() => {
+    if (isHost || !hasInitialUsersLoaded) return;
+    if (!isHostOnline) {
+      const video = videoRef.current;
+      if (video && !video.paused) {
+        video.pause();
+        setIsVideoPlaying(false);
+      }
+    }
+  }, [isHost, hasInitialUsersLoaded, isHostOnline]);
   const [typingUsers, setTypingUsers] = useState<{ [uid: string]: string }>({});
   const [speakingUsers, setSpeakingUsers] = useState<{ [uid: string]: boolean }>({});
   const [selectedUser, setSelectedUser] = useState<WatchRoomUser | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isScreenAudioMuted, setIsScreenAudioMuted] = useState(false);
+  const [showHostScreenPreview, setShowHostScreenPreview] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isChangeMovieModalOpen, setIsChangeMovieModalOpen] = useState(false);
   const [isLeaveConfirmationOpen, setIsLeaveConfirmationOpen] = useState(false);
@@ -211,13 +245,30 @@ export const WatchParty = () => {
     return () => clearInterval(interval);
   }, [user?.uid, room, hasJoined, isHost]);
 
-  function showToast(message: string) {
+  // Safely attach screen stream to video ref without triggering render cascades
+  useEffect(() => {
+    const video = screenVideoRef.current;
+    if (!video || !screenStream) return;
+    if (video.srcObject !== screenStream) {
+      video.srcObject = screenStream;
+    }
+    video.muted = isHost ? true : isScreenAudioMuted;
+    video.play().catch(() => {});
+  }, [screenStream, isHost, isScreenAudioMuted, showHostScreenPreview]);
+
+  useEffect(() => {
+    if (!screenStream) {
+      setShowHostScreenPreview(false);
+    }
+  }, [screenStream]);
+
+  const showToast = useCallback((message: string) => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3500);
-  }
+  }, []);
 
   const playJoinSound = () => {
     const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
@@ -366,6 +417,13 @@ export const WatchParty = () => {
       if (!isSubscribed) return;
       if (snapshot.exists()) {
         const roomData = { id: snapshot.id, ...snapshot.data() } as WatchRoom;
+        if (roomData.isDeleted) {
+          purgeRoomFromLocalState(cleanRoomId);
+          setRoom(null);
+          setRoomNotFound(true);
+          setRoomLoading(false);
+          return;
+        }
         setRoom(roomData);
         setRoomNotFound(false);
         setPermissionDenied(false);
@@ -403,6 +461,7 @@ export const WatchParty = () => {
           handleJoinRef.current(candidateName);
         }
       } else {
+        purgeRoomFromLocalState(cleanRoomId);
         setRoom(null);
         setRoomNotFound(true);
       }
@@ -464,6 +523,7 @@ export const WatchParty = () => {
 
       const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WatchRoomUser));
       setAllRoomUsers(users);
+      setHasInitialUsersLoaded(true);
 
       // Persistence check for guests and logged in users
       const currentUser = userRef.current;
@@ -662,6 +722,12 @@ export const WatchParty = () => {
     const video = videoRef.current;
     if (!video) return;
 
+    // RULE: The host is the playback authority. If the host is offline, playback is paused and participants cannot play.
+    if (!isHost && !isHostOnline) {
+      showToast("Playback is paused until the host returns.");
+      return;
+    }
+
     if (!video.src && !video.currentSrc) {
       console.warn("Playback postponed: video source is still loading");
       return;
@@ -708,7 +774,7 @@ export const WatchParty = () => {
         updateRoomPlayback(false, video.currentTime);
       }
     }
-  }, [isHost, updateRoomPlayback]);
+  }, [isHost, isHostOnline, updateRoomPlayback, showToast]);
 
   const handleUnmuteVideo = useCallback(() => {
     const video = videoRef.current;
@@ -736,12 +802,19 @@ export const WatchParty = () => {
   const handleSeekVideo = useCallback((newTime: number) => {
     const video = videoRef.current;
     if (!video) return;
+
+    // RULE: If host is offline, participants cannot seek/resume
+    if (!isHost && !isHostOnline) {
+      showToast("Playback is paused until the host returns.");
+      return;
+    }
+
     video.currentTime = newTime;
     setVideoCurrentTime(newTime);
     if (isHost) {
       updateRoomPlayback(!video.paused, newTime);
     }
-  }, [isHost, updateRoomPlayback]);
+  }, [isHost, isHostOnline, updateRoomPlayback, showToast]);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
     const video = videoRef.current;
@@ -792,6 +865,15 @@ export const WatchParty = () => {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || isHost || isScreenSharing || youtubeVideoId || isNetflixParty) return;
+
+    // RULE: The host is the playback authority. If the host is offline, playback must remain paused.
+    if (!isHostOnline) {
+      if (!video.paused) {
+        video.pause();
+        setIsVideoPlaying(false);
+      }
+      return;
+    }
 
     // Avoid syncing while another sync action is in-flight
     if (isRemoteSyncRef.current) return;
@@ -855,7 +937,7 @@ export const WatchParty = () => {
         isRemoteSyncRef.current = false;
       }, 1200);
     }
-  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isScreenSharing, youtubeVideoId, isNetflixParty]);
+  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isHostOnline, isScreenSharing, youtubeVideoId, isNetflixParty]);
 
   // Host auto-start playback if room is marked playing
   useEffect(() => {
@@ -1562,11 +1644,8 @@ export const WatchParty = () => {
 
       if (isHost && endAndPermanentlyDelete) {
         // Explicitly end and remove the room permanently
-        deleteDoc(doc(db, 'watchRooms', cleanRoomId)).catch(async () => {
-          await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
-            isActive: false
-          }).catch(() => {});
-        });
+        purgeRoomFromLocalState(cleanRoomId);
+        await deleteRoomPermanently(cleanRoomId);
       }
       
       setIsLeaveConfirmationOpen(false);
@@ -1841,6 +1920,7 @@ export const WatchParty = () => {
           </div>
           
           <div className="flex md:hidden items-center gap-2">
+            <ThemeToggle />
             <button 
               onClick={leaveRoom}
               className="p-2 bg-red-600 hover:bg-red-500 rounded-xl transition-all shadow-lg shadow-red-900/20 text-white"
@@ -1871,6 +1951,7 @@ export const WatchParty = () => {
               {copied ? <Check size={16} className="text-emerald-500" /> : <Share2 size={16} />}
               <span className="hidden md:inline">{copied ? 'Copied!' : 'Share Room'}</span>
             </button>
+            <ThemeToggle />
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
@@ -1917,6 +1998,8 @@ export const WatchParty = () => {
       <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
         {/* Left Side / Top: Player (Sticky top-0 on mobile so it stays fixed to the screen while scrolling) */}
         <div 
+          id="video-player-stage"
+          data-video-stage="true"
           ref={playerContainerRef}
           onMouseMove={handlePlayerMouseMove}
           onMouseLeave={() => { if (isVideoPlaying) setShowPlayerControls(false); }}
@@ -1938,87 +2021,128 @@ export const WatchParty = () => {
             {room.isScreenSharing ? (
               <div className="w-full h-full relative flex items-center justify-center bg-black select-none">
                 {screenStream ? (
-                  <div className="w-full h-full relative group">
-                    <video
-                      ref={(node) => {
-                        screenVideoRef.current = node;
-                        if (node && screenStream && node.srcObject !== screenStream) {
-                          node.srcObject = screenStream;
-                          node.muted = isHost ? true : isScreenAudioMuted;
-                          node.play().catch(() => {
-                            node.muted = true;
-                            setIsScreenAudioMuted(true);
-                            node.play().catch(() => {});
-                          });
-                        }
-                      }}
-                      onLoadedMetadata={(e) => {
-                        const video = e.currentTarget;
-                        video.muted = isHost ? true : isScreenAudioMuted;
-                        video.play().catch(() => {
-                          video.muted = true;
-                          setIsScreenAudioMuted(true);
-                          video.play().catch(() => {});
-                        });
-                      }}
-                      onClick={(e) => {
-                        const video = e.currentTarget;
-                        if (video.paused) {
-                          video.play().catch(() => {});
-                        }
-                      }}
-                      autoPlay
-                      playsInline
-                      muted={isHost ? true : isScreenAudioMuted}
-                      className="w-full h-full object-contain"
-                    />
+                  isHost && !showHostScreenPreview ? (
+                    /* Broadcaster HUD: eliminates infinite recursion loop on mobile devices, keeping the entire room ultra-responsive */
+                    <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center space-y-4 bg-gradient-to-b from-zinc-900 to-black select-none">
+                      <div className="relative">
+                        <div className="w-16 h-16 rounded-3xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shadow-xl shadow-emerald-950/40">
+                          <Radio size={32} className="animate-pulse" />
+                        </div>
+                        <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 animate-ping" />
+                      </div>
 
-                    {/* Participant Screen Audio and View Controls */}
-                    {!isHost && (
-                      <div className="absolute bottom-4 right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
-                        {isScreenAudioMuted ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (screenVideoRef.current) {
-                                screenVideoRef.current.muted = false;
-                                setIsScreenAudioMuted(false);
-                                screenVideoRef.current.play().catch(() => {});
-                              }
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all"
-                            title="Click to unmute screen audio"
-                          >
-                            <VolumeX size={14} />
-                            <span>Unmute Audio</span>
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (screenVideoRef.current) {
-                                screenVideoRef.current.muted = true;
-                                setIsScreenAudioMuted(true);
-                              }
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
-                            title="Mute screen audio"
-                          >
-                            <Volume2 size={14} />
-                            <span>Audio On</span>
-                          </button>
-                        )}
+                      <div className="space-y-1 max-w-sm">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Screen Broadcast Active
+                        </span>
+                        <h3 className="text-base sm:text-lg font-bold text-white pt-1">
+                          You Are Broadcasting Live
+                        </h3>
+                        <p className="text-xs text-gray-400">
+                          {liveUsers.length} {liveUsers.length === 1 ? 'viewer' : 'viewers'} in the room. Switch to any app, video, or presentation on your device to share.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                         <button
                           type="button"
-                          onClick={handleToggleFullscreen}
-                          className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
-                          title="Fullscreen"
+                          onClick={() => {
+                            if (screenStream) {
+                              screenStream.getTracks().forEach(t => t.stop());
+                            }
+                            setScreenStream(null);
+                            updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+                              isScreenSharing: false,
+                              screenHostId: null
+                            }).catch(() => {});
+                          }}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-red-950/40 flex items-center gap-1.5 cursor-pointer"
                         >
-                          <Maximize size={14} />
+                          <MonitorOff size={14} />
+                          <span>Stop Screen Share</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowHostScreenPreview(true)}
+                          className="px-3 py-2 bg-white/10 hover:bg-white/15 text-gray-300 hover:text-white rounded-xl text-xs font-semibold transition-all border border-white/10 flex items-center gap-1.5 cursor-pointer"
+                          title="Show video preview (may cause visual feedback on mobile)"
+                        >
+                          <Eye size={14} />
+                          <span>Preview Stream</span>
                         </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-full relative group">
+                      <video
+                        ref={screenVideoRef}
+                        autoPlay
+                        playsInline
+                        muted={isHost ? true : isScreenAudioMuted}
+                        className="w-full h-full object-contain"
+                      />
+
+                      {isHost && (
+                        <div className="absolute top-4 right-4 z-30">
+                          <button
+                            type="button"
+                            onClick={() => setShowHostScreenPreview(false)}
+                            className="px-2.5 py-1 rounded-lg bg-black/70 hover:bg-black/90 text-gray-300 hover:text-white text-[11px] font-medium border border-white/10 shadow-lg cursor-pointer"
+                          >
+                            Hide Preview
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Participant Screen Audio and View Controls */}
+                      {!isHost && (
+                        <div className="absolute bottom-4 right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
+                          {isScreenAudioMuted ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (screenVideoRef.current) {
+                                  screenVideoRef.current.muted = false;
+                                  setIsScreenAudioMuted(false);
+                                  screenVideoRef.current.play().catch(() => {});
+                                }
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all"
+                              title="Click to unmute screen audio"
+                            >
+                              <VolumeX size={14} />
+                              <span>Unmute Audio</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (screenVideoRef.current) {
+                                  screenVideoRef.current.muted = true;
+                                  setIsScreenAudioMuted(true);
+                                }
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
+                              title="Mute screen audio"
+                            >
+                              <Volume2 size={14} />
+                              <span>Audio On</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleToggleFullscreen}
+                            className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all"
+                            title="Fullscreen"
+                          >
+                            <Maximize size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
                 ) : isHost ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
                     <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
@@ -2071,10 +2195,11 @@ export const WatchParty = () => {
               <YouTubeSyncPlayer 
                 videoId={youtubeVideoId}
                 isHost={isHost}
-                roomPlaying={Boolean(room.playing)}
+                isHostOnline={isHostOnline}
+                roomPlaying={isHostOnline ? Boolean(room.playing) : false}
                 roomCurrentTime={room.currentTime || 0}
                 roomUpdatedAt={room.updatedAt || 0}
-                playing={Boolean(room.playing)}
+                playing={isHostOnline ? Boolean(room.playing) : false}
                 currentTime={room.currentTime || 0}
                 updatedAt={room.updatedAt || 0}
                 onPlaybackChange={updateRoomPlayback}
@@ -2163,7 +2288,7 @@ export const WatchParty = () => {
                 </video>
 
                 {/* Big Center Play/Pause Button when paused */}
-                {!isVideoPlaying && !videoLoadError && (
+                {!isVideoPlaying && !videoLoadError && isHostOnline && (
                   <div 
                     onClick={toggleVideoPlay}
                     className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px] transition-all cursor-pointer z-10"
@@ -2232,8 +2357,13 @@ export const WatchParty = () => {
                       max={videoDuration || 100}
                       step={0.1}
                       value={videoCurrentTime}
+                      disabled={!isHost && !isHostOnline}
                       onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
-                      className="w-full h-1.5 bg-white/20 hover:h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500 transition-all"
+                      className={`w-full h-1.5 bg-white/20 rounded-lg appearance-none transition-all ${
+                        !isHost && !isHostOnline
+                          ? 'opacity-40 cursor-not-allowed'
+                          : 'hover:h-2 cursor-pointer accent-emerald-500'
+                      }`}
                     />
                   </div>
 
@@ -2241,9 +2371,19 @@ export const WatchParty = () => {
                     {/* Left Controls */}
                     <div className="flex items-center gap-3">
                       <button
+                        type="button"
                         onClick={toggleVideoPlay}
-                        className="p-1.5 hover:bg-white/10 rounded-lg text-white transition-colors"
-                        title={isVideoPlaying ? "Pause" : "Play"}
+                        disabled={!isHost && !isHostOnline}
+                        className={`p-1.5 rounded-lg text-white transition-colors ${
+                          !isHost && !isHostOnline
+                            ? 'opacity-40 cursor-not-allowed'
+                            : 'hover:bg-white/10'
+                        }`}
+                        title={
+                          !isHost && !isHostOnline
+                            ? "Playback is paused until the host returns."
+                            : isVideoPlaying ? "Pause" : "Play"
+                        }
                       >
                         {isVideoPlaying ? <Pause size={18} /> : <Play size={18} className="fill-white" />}
                       </button>
@@ -2282,15 +2422,21 @@ export const WatchParty = () => {
                     <div className="flex items-center gap-3">
                       {!isHost && (
                         <button
+                          type="button"
                           onClick={() => {
                             if (videoRef.current && room?.currentTime !== undefined) {
                               handleSeekVideo(room.currentTime);
                             }
                           }}
-                          className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all"
-                          title="Align video to host position"
+                          disabled={!isHostOnline}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all ${
+                            !isHostOnline
+                              ? 'bg-white/5 text-gray-500 border border-white/5 cursor-not-allowed'
+                              : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                          }`}
+                          title={!isHostOnline ? "Playback is paused until the host returns." : "Align video to host position"}
                         >
-                          <RefreshCw size={12} /> Sync with Host
+                          <RefreshCw size={12} className={!isHostOnline ? '' : 'text-emerald-400'} /> Sync with Host
                         </button>
                       )}
 
@@ -2335,11 +2481,45 @@ export const WatchParty = () => {
               </AnimatePresence>
             </div>
 
+            {/* Host Offline Global Overlay (Applies to all video sources) */}
+            {!isHost && !isHostOnline && hasInitialUsersLoaded && (
+              <div 
+                id="host-offline-overlay"
+                className="absolute inset-0 z-30 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center select-none"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-4 shadow-xl shadow-amber-950/40">
+                  <Pause size={32} className="fill-amber-400/20" />
+                </div>
+
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs font-bold mb-3 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                  <span>Host is offline</span>
+                </div>
+
+                <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
+                  Host is offline
+                </h3>
+
+                <p className="text-sm sm:text-base text-gray-300 max-w-md font-medium leading-relaxed mb-5">
+                  Playback is paused until the host returns.
+                </p>
+
+                <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-400">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span>Waiting for <strong className="text-white">{room.hostName || 'the host'}</strong> to reconnect</span>
+                </div>
+              </div>
+            )}
+
             {!isHost && !currentIsEmbed && (
-              <div className="absolute top-4 right-4 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 flex items-center gap-2">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+              <div className="absolute top-4 right-4 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 flex items-center gap-2 z-20">
+                <div className={`w-2 h-2 rounded-full ${
+                  !isHostOnline
+                    ? 'bg-amber-400 animate-pulse'
+                    : room.playing ? 'bg-emerald-500 animate-pulse' : 'bg-yellow-500'
+                }`} />
                 <span className="text-[10px] font-black text-white uppercase tracking-widest">
-                  {room.playing ? 'In Sync (Playing)' : 'In Sync (Paused)'}
+                  {!isHostOnline ? 'Host Offline (Paused)' : room.playing ? 'In Sync (Playing)' : 'In Sync (Paused)'}
                 </span>
               </div>
             )}
