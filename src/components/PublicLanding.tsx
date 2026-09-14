@@ -20,7 +20,8 @@ import {
   CheckCircle2,
   Award,
   Clock,
-  Cpu
+  Cpu,
+  Users
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { WatchPartyModal } from './WatchPartyModal';
