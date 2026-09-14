@@ -85,27 +85,46 @@ export const Chat: React.FC<ChatProps> = ({ matchId, onClose }) => {
 
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-white/10"
+        className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-white/10"
       >
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex flex-col ${msg.userId === user?.uid ? 'items-end' : 'items-start'}`}>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{msg.username}</span>
-              {msg.createdAt && (
-                <span className="text-[8px] text-gray-600">
-                  {format(msg.createdAt.toDate(), 'HH:mm')}
-                </span>
+        {messages.map((msg, index) => {
+          const prevMsg = index > 0 ? messages[index - 1] : null;
+          const isSameSender = Boolean(
+            prevMsg && (
+              (msg.userId && prevMsg.userId)
+                ? msg.userId === prevMsg.userId
+                : msg.username === prevMsg.username
+            )
+          );
+          const isMe = msg.userId === user?.uid;
+
+          return (
+            <div 
+              key={msg.id || index} 
+              className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${
+                isSameSender ? 'mt-1' : index === 0 ? 'mt-0' : 'mt-3.5'
+              }`}
+            >
+              {!isSameSender && (
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{msg.username}</span>
+                  {msg.createdAt && (
+                    <span className="text-[8px] text-gray-600">
+                      {format(msg.createdAt.toDate(), 'HH:mm')}
+                    </span>
+                  )}
+                </div>
               )}
+              <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
+                isMe 
+                  ? `bg-emerald-600 text-white ${isSameSender ? 'rounded-tr-md' : 'rounded-tr-none'}` 
+                  : `bg-white/5 text-gray-200 ${isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'} border border-white/10`
+              }`}>
+                {msg.text}
+              </div>
             </div>
-            <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-              msg.userId === user?.uid 
-                ? 'bg-emerald-600 text-white rounded-tr-none' 
-                : 'bg-white/5 text-gray-200 rounded-tl-none border border-white/10'
-            }`}>
-              {msg.text}
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-2 opacity-50">
             <MessageCircle size={48} />

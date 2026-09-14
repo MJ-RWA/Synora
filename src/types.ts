@@ -59,12 +59,16 @@ export interface WatchRoom {
   allowedUsers?: string[];
   isScreenSharing?: boolean;
   screenHostId?: string | null;
+  isCameraActive?: boolean;
+  cameraHostId?: string | null;
   movieId?: string | null;
   seriesId?: string | null;
   episodeId?: string | null;
   contentType?: string;
   contentId?: string | null;
   sourceType?: string;
+  isLiveParty?: boolean;
+  isLiveStreaming?: boolean;
   netflixPlayback?: NetflixRoomPlayback | null;
 }
 

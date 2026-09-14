@@ -315,9 +315,14 @@ service cloud.firestore {
               (('ownerId' in resource.data) && request.auth.uid == resource.data.ownerId)
             )
           ) ||
-          // Screen share state update
+          // Screen share or Camera broadcast state update
           (
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isScreenSharing', 'screenHostId']) &&
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isScreenSharing', 'screenHostId']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId', 'isScreenSharing']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId', 'isScreenSharing', 'screenHostId'])
+            ) &&
             (
               resource.data.isPrivate != true ||
               (isAuthenticated() && (

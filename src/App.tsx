@@ -4,6 +4,7 @@ import { Layout } from './components/Layout';
 import { AdminLayout } from './components/AdminLayout';
 import { Home } from './pages/Home';
 import { WatchParty } from './pages/WatchParty';
+import { LiveParty } from './pages/LiveParty';
 import { Friends } from './pages/Friends';
 import { Profile } from './pages/Profile';
 import { Login } from './pages/Login';
@@ -48,6 +49,8 @@ export default function App() {
             <Routes>
               {/* Main Watch Party Public Routes */}
               <Route path="/" element={<Layout><Home /></Layout>} />
+              <Route path="/live/:roomId" element={<Layout><LiveParty /></Layout>} />
+              <Route path="/live-party/:roomId" element={<Layout><LiveParty /></Layout>} />
               <Route path="/watchparty/:roomId" element={<Layout><WatchParty /></Layout>} />
               <Route path="/watch-party/:roomId" element={<Layout><WatchParty /></Layout>} />
               <Route path="/room/:roomId" element={<Layout><WatchParty /></Layout>} />

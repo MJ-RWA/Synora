@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { collection, doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { X, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2 } from 'lucide-react';
+import { X, Link as LinkIcon, Monitor, Play, User, Sparkles, Youtube, Tv, AlertCircle, LogIn, Loader2, Globe, Lock, CheckCircle2, Camera } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
@@ -11,7 +11,7 @@ interface WatchPartyModalProps {
   onClose: () => void;
   defaultVideoUrl?: string;
   defaultTitle?: string;
-  defaultTab?: 'embed' | 'custom' | 'screen' | 'netflix';
+  defaultTab?: 'embed' | 'custom' | 'screen' | 'netflix' | 'live';
 }
 
 export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({ 
@@ -24,7 +24,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
   const navigate = useNavigate();
   const { user, loading: authLoading, loginWithGoogle } = useAuth();
   const extensionBridge = useExtensionBridge();
-  const [activeTab, setActiveTab] = useState<'embed' | 'custom' | 'screen' | 'netflix'>(defaultTab || 'embed');
+  const [activeTab, setActiveTab] = useState<'embed' | 'custom' | 'screen' | 'netflix' | 'live'>(defaultTab || 'embed');
   const [username, setUsername] = useState(user?.displayName || '');
   const [roomTitle, setRoomTitle] = useState(defaultTitle || '');
   const [customUrl, setCustomUrl] = useState(defaultVideoUrl || '');
@@ -154,6 +154,9 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         isScreenSharing = true;
         videoUrl = '';
         if (!finalTitle) finalTitle = `${finalName}'s Live Screen Party`;
+      } else if (sourceType === 'live') {
+        videoUrl = '';
+        if (!finalTitle) finalTitle = `${finalName}'s Live Camera Party`;
       } else if (sourceType === 'netflix') {
         const extContent = extensionBridge.netflixState.content;
         const extState = extensionBridge.netflixState.state;
@@ -213,6 +216,8 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         isScreenSharing: Boolean(isScreenSharing),
         screenHostId: isScreenSharing ? hostUid : null,
         sourceType,
+        isLiveParty: sourceType === 'live',
+        isLiveStreaming: sourceType === 'live',
         netflixPlayback: netflixPlayback
       };
 
@@ -263,8 +268,10 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       ]);
 
       // 4. Navigate instantly to the room with preloaded state
+      sessionStorage.setItem(`synora_host_${roomId}`, 'true');
       onClose();
-      navigate(`/watchparty/${roomId}?username=${encodeURIComponent(finalName)}&invite=${inviteCode}`, {
+      const targetPath = sourceType === 'live' ? `/live/${roomId}` : `/watchparty/${roomId}`;
+      navigate(`${targetPath}?username=${encodeURIComponent(finalName)}&invite=${inviteCode}`, {
         state: {
           initialRoom: { id: roomId, ...roomData },
           isHostCreation: true
@@ -379,12 +386,12 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
           {/* Source Tabs */}
           <div className="space-y-3">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Choose Content Source</label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-1 bg-white/5 rounded-2xl border border-white/10">
               <button 
                 type="button"
                 onClick={() => setActiveTab('embed')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'embed' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
@@ -397,20 +404,33 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('custom')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'custom' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
                 } disabled:opacity-50`}
               >
-                <LinkIcon size={15} /> Video URL
+                <LinkIcon size={15} /> URL
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTab('live')}
+                disabled={creating}
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
+                  activeTab === 'live' 
+                    ? 'bg-red-600 text-white shadow-md' 
+                    : 'text-gray-400 hover:text-white'
+                } disabled:opacity-50`}
+              >
+                <Camera size={15} /> Live Party
               </button>
 
               <button 
                 type="button"
                 onClick={() => setActiveTab('netflix')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'netflix' 
                     ? 'bg-red-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
@@ -423,7 +443,7 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('screen')}
                 disabled={creating}
-                className={`flex items-center justify-center gap-2 py-2.5 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all ${
                   activeTab === 'screen' 
                     ? 'bg-emerald-600 text-white shadow-md' 
                     : 'text-gray-400 hover:text-white'
@@ -547,6 +567,18 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
             </div>
           )}
 
+          {activeTab === 'live' && (
+            <div className="p-5 bg-gradient-to-br from-red-950/30 to-black rounded-2xl border border-red-500/20 text-center space-y-3">
+              <div className="w-12 h-12 bg-red-500/20 text-red-400 rounded-2xl flex items-center justify-center mx-auto">
+                <Camera size={24} />
+              </div>
+              <h4 className="text-base font-bold text-white">Live Camera Party</h4>
+              <p className="text-xs text-gray-300 max-w-md mx-auto">
+                Broadcast your camera and microphone live to your friends with peer-to-peer WebRTC streaming. Switch between front and rear cameras, mute audio, and chat in real-time.
+              </p>
+            </div>
+          )}
+
           {activeTab === 'screen' && (
             <div className="p-5 bg-gradient-to-br from-indigo-900/30 to-purple-900/20 rounded-2xl border border-indigo-500/20 text-center space-y-3">
               <div className="w-12 h-12 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto">
@@ -641,8 +673,17 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
               </>
             ) : (
               <>
-                <Play size={16} fill="currentColor" />
-                <span>Launch Watch Party</span>
+                {activeTab === 'live' ? (
+                  <>
+                    <Camera size={16} />
+                    <span>Start Live Party</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={16} fill="currentColor" />
+                    <span>Launch Watch Party</span>
+                  </>
+                )}
               </>
             )}
           </button>

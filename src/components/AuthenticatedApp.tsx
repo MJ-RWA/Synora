@@ -22,7 +22,8 @@ import {
   Award, 
   User as UserIcon, 
   LogOut, 
-  ShieldCheck 
+  ShieldCheck,
+  Camera 
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, onSnapshot, getDocs, doc, getDoc, updateDoc, limit } from 'firebase/firestore';
@@ -73,7 +74,7 @@ export const AuthenticatedApp: React.FC = () => {
   // Modals & Navigation
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
-  const [createModalTab, setCreateModalTab] = useState<'custom' | 'embed' | 'screen' | 'netflix'>('embed');
+  const [createModalTab, setCreateModalTab] = useState<'custom' | 'embed' | 'screen' | 'netflix' | 'live'>('embed');
   const [roomToDelete, setRoomToDelete] = useState<WatchRoom | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -369,14 +370,21 @@ export const AuthenticatedApp: React.FC = () => {
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  const handleOpenCreateWithTab = (tab: 'custom' | 'embed' | 'screen' | 'netflix') => {
+  const handleOpenCreateWithTab = (tab: 'custom' | 'embed' | 'screen' | 'netflix' | 'live') => {
     setCreateModalTab(tab);
     setIsCreateModalOpen(true);
   };
 
-  const handleCopyLink = (roomId: string, e?: React.MouseEvent) => {
+  const getRoomPath = (roomItem: { id: string; sourceType?: string; isLiveParty?: boolean }) => {
+    return (roomItem.sourceType === 'live' || roomItem.isLiveParty) ? `/live/${roomItem.id}` : `/watchparty/${roomItem.id}`;
+  };
+
+  const handleCopyLink = (roomOrId: string | WatchRoom, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const url = `${window.location.origin}/watchparty/${roomId}`;
+    const roomId = typeof roomOrId === 'string' ? roomOrId : roomOrId.id;
+    const isLive = typeof roomOrId !== 'string' && (roomOrId.sourceType === 'live' || roomOrId.isLiveParty);
+    const path = isLive ? `/live/${roomId}` : `/watchparty/${roomId}`;
+    const url = `${window.location.origin}${path}`;
     navigator.clipboard.writeText(url);
     setCopiedRoomId(roomId);
     setTimeout(() => {
@@ -385,16 +393,19 @@ export const AuthenticatedApp: React.FC = () => {
   };
 
   const handleReopenParty = async (roomItem: WatchRoom) => {
+    const isLive = roomItem.sourceType === 'live' || roomItem.isLiveParty;
+    const targetRoute = isLive ? `/live/${roomItem.id}` : `/watchparty/${roomItem.id}`;
     try {
       const isOwner = user?.uid === roomItem.hostId || user?.uid === roomItem.ownerId;
       if (isOwner && !roomItem.isActive) {
         await updateDoc(doc(db, 'watchRooms', roomItem.id), {
           isActive: true,
+          isLiveStreaming: isLive ? true : undefined,
           updatedAt: Date.now(),
           lastActivity: Date.now()
         });
       }
-      navigate(`/watchparty/${roomItem.id}`, {
+      navigate(targetRoute, {
         state: { 
           initialRoom: { ...roomItem, isActive: true },
           isHostCreation: isOwner
@@ -402,7 +413,7 @@ export const AuthenticatedApp: React.FC = () => {
       });
     } catch (err) {
       console.warn("Could not reactivate room document before navigation:", err);
-      navigate(`/watchparty/${roomItem.id}`);
+      navigate(targetRoute);
     }
   };
 
@@ -526,7 +537,7 @@ export const AuthenticatedApp: React.FC = () => {
         
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           {/* User Profile Summary */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <Link 
               to="/profile" 
               className="relative group shrink-0"
@@ -540,7 +551,7 @@ export const AuthenticatedApp: React.FC = () => {
               <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-black" title="Online" />
             </Link>
 
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider">
                   Watch Party Shell
@@ -551,14 +562,25 @@ export const AuthenticatedApp: React.FC = () => {
                   </span>
                 )}
               </div>
-              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight truncate">
                 Welcome, {user?.displayName || user?.email?.split('@')[0] || 'Friend'}
               </h1>
-              <p className="text-xs sm:text-sm text-gray-400 flex items-center gap-3">
-                <span>{user?.email}</span>
-                <span className="text-gray-600">•</span>
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <Clock size={13} /> {watchTimeFormatted} watched
+              <p className="text-xs sm:text-sm text-gray-400 flex items-center gap-2 sm:gap-2.5 flex-nowrap min-w-0">
+                <span 
+                  className="truncate text-gray-400 max-w-[110px] xs:max-w-[160px] sm:max-w-[220px] md:max-w-none"
+                  title={user?.email || ''}
+                >
+                  {user?.email}
+                </span>
+                <span className="text-gray-600 select-none shrink-0" aria-hidden="true">•</span>
+                <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap leading-none">
+                  <Clock size={13} className="shrink-0 text-emerald-400" />
+                  <span className="font-semibold text-emerald-400 tabular-nums leading-none">
+                    {watchTimeFormatted}
+                  </span>
+                  <span className="text-[11px] sm:text-xs text-gray-400/80 font-normal leading-none">
+                    watched
+                  </span>
                 </span>
               </p>
             </div>
@@ -573,6 +595,17 @@ export const AuthenticatedApp: React.FC = () => {
             >
               <Sparkles size={15} />
               <span>New Party</span>
+            </button>
+
+            <button
+              id="appGoLiveBtn"
+              onClick={() => handleOpenCreateWithTab('live')}
+              className="px-4 py-2.5 bg-red-600/90 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-red-950/30 flex items-center gap-2 hover:scale-105 active:scale-95 border border-red-500/30"
+              title="Start Live Camera Party"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+              <Camera size={15} />
+              <span>Go Live</span>
             </button>
 
             <button
@@ -841,7 +874,12 @@ export const AuthenticatedApp: React.FC = () => {
                         {/* Status Badges */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 flex-wrap">
-                            {room.isActive ? (
+                            {room.sourceType === 'live' || room.isLiveParty ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 text-[10px] font-black uppercase tracking-wider">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                Live Camera
+                              </span>
+                            ) : room.isActive ? (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                                 Live Now
@@ -888,10 +926,17 @@ export const AuthenticatedApp: React.FC = () => {
                           <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-1">
                             {room.title || 'Untitled Watch Party'}
                           </h3>
-                          <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
-                            <Film size={12} className="text-emerald-400 shrink-0" />
-                            <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
-                          </p>
+                          {room.sourceType === 'live' || room.isLiveParty ? (
+                            <p className="text-xs text-red-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Camera size={12} className="text-red-400 shrink-0" />
+                              <span>Live Camera Broadcast</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Film size={12} className="text-emerald-400 shrink-0" />
+                              <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
+                            </p>
+                          )}
                         </div>
 
                         {/* Participants & Host Metadata */}
@@ -918,7 +963,7 @@ export const AuthenticatedApp: React.FC = () => {
                         <button
                           onClick={() => {
                             if (room.isActive) {
-                              navigate(`/watchparty/${room.id}`);
+                              navigate(getRoomPath(room));
                             } else {
                               handleReopenParty(room);
                             }
@@ -930,7 +975,7 @@ export const AuthenticatedApp: React.FC = () => {
                         </button>
 
                         <button
-                          onClick={(e) => handleCopyLink(room.id, e)}
+                          onClick={(e) => handleCopyLink(room, e)}
                           className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
                             isCopied 
                               ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 
@@ -1036,7 +1081,12 @@ export const AuthenticatedApp: React.FC = () => {
                         {/* Status Badges */}
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 flex-wrap">
-                            {room.isActive ? (
+                            {room.sourceType === 'live' || room.isLiveParty ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 text-[10px] font-black uppercase tracking-wider">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                Live Camera
+                              </span>
+                            ) : room.isActive ? (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                                 Live Now
@@ -1083,10 +1133,17 @@ export const AuthenticatedApp: React.FC = () => {
                           <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-emerald-400 transition-colors line-clamp-1">
                             {room.title || 'Untitled Watch Party'}
                           </h3>
-                          <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
-                            <Film size={12} className="text-emerald-400 shrink-0" />
-                            <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
-                          </p>
+                          {room.sourceType === 'live' || room.isLiveParty ? (
+                            <p className="text-xs text-red-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Camera size={12} className="text-red-400 shrink-0" />
+                              <span>Live Camera Broadcast</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Film size={12} className="text-emerald-400 shrink-0" />
+                              <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
+                            </p>
+                          )}
                         </div>
 
                         {/* Participants & Metadata */}
@@ -1113,7 +1170,7 @@ export const AuthenticatedApp: React.FC = () => {
                         <button
                           onClick={() => {
                             if (room.isActive) {
-                              navigate(`/watchparty/${room.id}`);
+                              navigate(getRoomPath(room));
                             } else {
                               handleReopenParty(room);
                             }
@@ -1125,7 +1182,7 @@ export const AuthenticatedApp: React.FC = () => {
                         </button>
 
                         <button
-                          onClick={(e) => handleCopyLink(room.id, e)}
+                          onClick={(e) => handleCopyLink(room, e)}
                           className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
                             isCopied 
                               ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 
@@ -1232,10 +1289,17 @@ export const AuthenticatedApp: React.FC = () => {
                       <div className="space-y-3">
                         {/* Status Header */}
                         <div className="flex items-center justify-between">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            Playing
-                          </span>
+                          {room.sourceType === 'live' || room.isLiveParty ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 text-[10px] font-black uppercase tracking-wider">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                              Live Camera
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                              Playing
+                            </span>
+                          )}
 
                           <div className="flex items-center gap-1.5">
                             {isHost ? (
@@ -1267,10 +1331,17 @@ export const AuthenticatedApp: React.FC = () => {
                           <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-blue-400 transition-colors line-clamp-1">
                             {room.title || 'Live Watch Room'}
                           </h3>
-                          <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
-                            <Film size={12} className="text-blue-400 shrink-0" />
-                            <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
-                          </p>
+                          {room.sourceType === 'live' || room.isLiveParty ? (
+                            <p className="text-xs text-red-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Camera size={12} className="text-red-400 shrink-0" />
+                              <span>Live Camera Broadcast</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 line-clamp-1 mt-0.5 flex items-center gap-1.5">
+                              <Film size={12} className="text-blue-400 shrink-0" />
+                              <span>{room.mediaTitle || room.mediaType || 'Media Stream'}</span>
+                            </p>
+                          )}
                         </div>
 
                         {/* Participant Count */}
@@ -1288,7 +1359,7 @@ export const AuthenticatedApp: React.FC = () => {
                       {/* Room Action Buttons */}
                       <div className="mt-5 pt-3 border-t border-white/5 flex items-center gap-2">
                         <button
-                          onClick={() => navigate(`/watchparty/${room.id}`)}
+                          onClick={() => navigate(getRoomPath(room))}
                           className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-emerald-950/30 flex items-center justify-center gap-1.5"
                         >
                           <Play size={13} />
@@ -1296,7 +1367,7 @@ export const AuthenticatedApp: React.FC = () => {
                         </button>
 
                         <button
-                          onClick={(e) => handleCopyLink(room.id, e)}
+                          onClick={(e) => handleCopyLink(room, e)}
                           className={`p-2.5 rounded-xl border transition-all flex items-center justify-center ${
                             isCopied 
                               ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' 

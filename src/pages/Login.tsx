@@ -18,12 +18,6 @@ export const Login = () => {
   const redirect = searchParams.get('redirect') || '/';
   const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
 
-  const handleQuickDemo = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setIsLogin(true);
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -180,28 +174,6 @@ export const Login = () => {
                 </a>
               </div>
             )}
-
-            <div className="mt-4 pt-4 border-t border-white/5">
-              <p className="text-gray-500 text-[11px] font-bold uppercase tracking-wider mb-2 text-center">
-                Quick Test Accounts
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleQuickDemo('admin@streamarena.live', 'Admin123!')}
-                  className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-gray-300 text-xs font-semibold transition-all text-center"
-                >
-                  Admin Demo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickDemo('viewer@streamarena.live', 'Viewer123!')}
-                  className="px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-gray-300 text-xs font-semibold transition-all text-center"
-                >
-                  Viewer Demo
-                </button>
-              </div>
-            </div>
           </form>
 
           <div className="mt-8 text-center space-y-4">

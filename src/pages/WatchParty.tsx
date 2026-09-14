@@ -7,10 +7,11 @@ import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
 import Hls from 'hls.js';
-import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye } from 'lucide-react';
+import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye, Camera } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
+import { CameraBroadcast } from '../components/CameraBroadcast';
 import { YouTubeSyncPlayer } from '../components/YouTubeSyncPlayer';
 import { NetflixSyncCompanion } from '../components/NetflixSyncCompanion';
 import { SocialParticipantModal } from '../components/SocialParticipantModal';
@@ -120,6 +121,10 @@ export const WatchParty = () => {
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [isScreenAudioMuted, setIsScreenAudioMuted] = useState(false);
   const [showHostScreenPreview, setShowHostScreenPreview] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [isCameraAudioMuted, setIsCameraAudioMuted] = useState(false);
+  const [cameraFacingMode, setCameraFacingMode] = useState<'user' | 'environment'>('user');
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isChangeMovieModalOpen, setIsChangeMovieModalOpen] = useState(false);
   const [isLeaveConfirmationOpen, setIsLeaveConfirmationOpen] = useState(false);
@@ -424,6 +429,13 @@ export const WatchParty = () => {
           setRoomLoading(false);
           return;
         }
+
+        // If this is a Live Party room, redirect to dedicated Live Studio
+        if (roomData.sourceType === 'live' || roomData.isLiveParty) {
+          navigate(`/live/${cleanRoomId}${window.location.search}`, { replace: true });
+          return;
+        }
+
         setRoom(roomData);
         setRoomNotFound(false);
         setPermissionDenied(false);
@@ -1285,6 +1297,37 @@ export const WatchParty = () => {
     }
   }, [cleanRoomId, effectiveUserId]);
 
+  const handleCameraStream = useCallback(async (stream: MediaStream | null) => {
+    setCameraStream(stream);
+    if (!cleanRoomId) return;
+
+    try {
+      const currentUser = userRef.current;
+      const currentRoom = roomRef.current;
+      const currentUid = currentUser?.uid || effectiveUserId;
+      const isHostUser = Boolean(
+        isHost ||
+        (currentUser?.uid && currentRoom && (currentUser.uid === currentRoom.hostId || currentUser.uid === currentRoom.ownerId))
+      );
+
+      if (isHostUser) {
+        await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+          isCameraActive: Boolean(stream),
+          cameraHostId: stream ? currentUid : null,
+          ...(stream ? { isScreenSharing: false } : {}),
+        });
+      }
+    } catch (error) {
+      console.warn('Notice updating camera state:', error);
+    }
+  }, [cleanRoomId, effectiveUserId, isHost]);
+
+  useEffect(() => {
+    if (!room?.isCameraActive && !isHost && cameraStream) {
+      setCameraStream(null);
+    }
+  }, [room?.isCameraActive, isHost, cameraStream]);
+
   const inviteFriend = async (friend: User) => {
     if (!cleanRoomId || !user) return;
     try {
@@ -1985,6 +2028,20 @@ export const WatchParty = () => {
                 onToast={showToast}
               />
             )}
+            {cleanRoomId && (
+              <CameraBroadcast
+                roomId={cleanRoomId}
+                userId={effectiveUserId}
+                username={username}
+                isHost={isHost}
+                isCameraActive={Boolean(room?.isCameraActive)}
+                cameraHostId={room?.cameraHostId || room?.hostId}
+                onStreamReady={handleCameraStream}
+                onToast={showToast}
+                facingMode={cameraFacingMode}
+                onFacingModeChange={setCameraFacingMode}
+              />
+            )}
             <button 
               onClick={leaveRoom}
               className="hidden md:block px-4 py-2 bg-red-600 hover:bg-red-500 rounded-xl text-xs font-bold transition-all shadow-lg shadow-red-900/20 text-white"
@@ -2018,7 +2075,128 @@ export const WatchParty = () => {
               </button>
             </div>
           )}
-            {room.isScreenSharing ? (
+            {room.isCameraActive || Boolean(cameraStream) ? (
+              <div className="w-full h-full relative flex items-center justify-center bg-black select-none">
+                {cameraStream ? (
+                  <div className="w-full h-full relative group">
+                    <video
+                      ref={(el) => {
+                        cameraVideoRef.current = el;
+                        if (el && cameraStream) {
+                          if (el.srcObject !== cameraStream) {
+                            el.srcObject = cameraStream;
+                          }
+                          el.muted = isHost ? true : isCameraAudioMuted;
+                          el.playsInline = true;
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      muted={isHost ? true : isCameraAudioMuted}
+                      className={`w-full h-full object-contain ${isHost && cameraFacingMode === 'user' ? '-scale-x-100' : ''}`}
+                    />
+
+                    {/* Camera Live Badge */}
+                    <div className="absolute top-4 left-4 bg-emerald-600 px-3 py-1 rounded-full flex items-center gap-2 shadow-lg z-20">
+                      <Camera size={14} className="animate-pulse text-white" />
+                      <span className="text-[10px] font-black uppercase tracking-widest text-white">
+                        {isHost ? 'Live Camera (Broadcasting)' : `${room.hostName}'s Camera`}
+                      </span>
+                    </div>
+
+                    {/* Controls for audio & fullscreen */}
+                    <div className="absolute bottom-4 right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
+                      {!isHost && (
+                        isCameraAudioMuted ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (cameraVideoRef.current) {
+                                cameraVideoRef.current.muted = false;
+                                setIsCameraAudioMuted(false);
+                                cameraVideoRef.current.play().catch(() => {});
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                            title="Click to unmute camera audio"
+                          >
+                            <VolumeX size={14} />
+                            <span>Unmute Audio</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (cameraVideoRef.current) {
+                                cameraVideoRef.current.muted = true;
+                                setIsCameraAudioMuted(true);
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                            title="Mute camera audio"
+                          >
+                            <Volume2 size={14} />
+                            <span>Audio On</span>
+                          </button>
+                        )
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleToggleFullscreen}
+                        className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                        title="Fullscreen"
+                      >
+                        <Maximize size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ) : isHost ? (
+                  <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                      <Camera size={28} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-bold text-white">Camera Mode Ready</h3>
+                      <p className="text-xs text-gray-400 mt-1 max-w-sm">Tap "Camera" in the bar above to start broadcasting your camera to the room.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 text-emerald-400 flex items-center justify-center animate-pulse">
+                      <Camera size={28} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Connecting to Host Camera...</h3>
+                      <p className="text-xs text-gray-400 mt-1 max-w-xs">Establishing real-time WebRTC camera connection with host</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (cleanRoomId) {
+                          const targetHost = room.cameraHostId || room.hostId || 'host';
+                          try {
+                            await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                              from: effectiveUserId,
+                              to: targetHost,
+                              type: 'camera-request',
+                              time: new Date().toISOString(),
+                            });
+                            showToast('Re-requesting camera stream from host...');
+                          } catch (e) {
+                            console.warn('Manual camera retry error:', e);
+                          }
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Re-request Camera Stream</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : room.isScreenSharing ? (
               <div className="w-full h-full relative flex items-center justify-center bg-black select-none">
                 {screenStream ? (
                   isHost && !showHostScreenPreview ? (
@@ -2683,19 +2861,40 @@ export const WatchParty = () => {
                   </AnimatePresence>
                 </div>
 
-                {messages.map((msg) => (
-                  <div key={msg.id} className="flex flex-col gap-0.5 sm:gap-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className={`text-[10px] sm:text-[11px] font-black ${msg.username === room.hostName ? 'text-emerald-500' : 'text-gray-400'}`}>
-                        {msg.username}
-                      </span>
-                      <span className="text-[8px] sm:text-[9px] text-gray-600">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                {messages.map((msg, index) => {
+                  const prevMsg = index > 0 ? messages[index - 1] : null;
+                  const isSameSender = Boolean(
+                    prevMsg && (
+                      (msg.userId && prevMsg.userId)
+                        ? msg.userId === prevMsg.userId
+                        : msg.username === prevMsg.username
+                    )
+                  );
+                  const isHost = msg.username === room.hostName;
+
+                  return (
+                    <div 
+                      key={msg.id || `${msg.timestamp}-${index}`} 
+                      className={`flex flex-col ${isSameSender ? 'mt-1' : index === 0 ? 'mt-0' : 'mt-2.5 sm:mt-3'}`}
+                    >
+                      {!isSameSender && (
+                        <div className="flex items-baseline gap-2 mb-1">
+                          <span className={`text-[10px] sm:text-[11px] font-black ${isHost ? 'text-emerald-500' : 'text-gray-400'}`}>
+                            {msg.username}
+                          </span>
+                          <span className="text-[8px] sm:text-[9px] text-gray-600">
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      )}
+                      <p className={`text-[11px] sm:text-xs text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl border border-white/5 leading-relaxed break-words ${
+                        isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'
+                      }`}>
+                        {msg.text}
+                      </p>
                     </div>
-                    <p className="text-[11px] sm:text-xs text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl rounded-tl-none border border-white/5 leading-relaxed">
-                      {msg.text}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
                 <div ref={chatEndRef} />
               </div>
 
