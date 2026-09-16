@@ -472,8 +472,8 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({
             const data = change.doc.data() as WatchRoomVoiceSignal;
             const fromPeerId = data.from;
 
-            // Do not delete or handle screen share signals in VoiceChat
-            if (data.type?.startsWith('screen-')) {
+            // Do not delete or handle screen share or camera broadcast signals in VoiceChat
+            if (data.type?.startsWith('screen-') || data.type?.startsWith('camera-')) {
               continue;
             }
 

@@ -17,6 +17,7 @@ export interface CameraBroadcastProps {
   facingMode?: 'user' | 'environment';
   onFacingModeChange?: (mode: 'user' | 'environment') => void;
   autoStart?: boolean;
+  isHostOnline?: boolean;
 }
 
 const getIceServers = (): RTCConfiguration => {
@@ -70,6 +71,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   facingMode = 'user',
   onFacingModeChange,
   autoStart = false,
+  isHostOnline = true,
 }) => {
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -633,13 +635,24 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   if (!isHost) {
     if (!isCameraActive) return null;
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold shrink-0">
-          <Camera size={13} className="animate-pulse" />
-          <span className="hidden sm:inline">Host Live Camera</span>
-          <span className="sm:hidden">Live</span>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span
+          className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl border text-xs font-bold shrink-0 whitespace-nowrap ${
+            isHostOnline === false
+              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+              : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+          }`}
+        >
+          {isHostOnline === false ? (
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+          ) : (
+            <Camera size={13} className="animate-pulse shrink-0" />
+          )}
+          <span className="whitespace-nowrap">
+            {isHostOnline === false ? 'Host Offline (Paused)' : 'Host Live Camera'}
+          </span>
         </span>
-        {isConnecting && (
+        {isConnecting && isHostOnline !== false && (
           <button
             onClick={() => {
               const targetHost = cameraHostId || 'host';
@@ -650,10 +663,10 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
                 time: new Date().toISOString(),
               }).catch(() => {});
             }}
-            className="flex items-center gap-1 px-2 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-semibold border border-white/10 shrink-0"
+            className="flex items-center gap-1 px-2 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-semibold border border-white/10 shrink-0 whitespace-nowrap"
             title="Reconnect stream"
           >
-            <RefreshCw size={12} className="animate-spin text-emerald-400" />
+            <RefreshCw size={12} className="animate-spin text-emerald-400 shrink-0" />
             <span className="hidden sm:inline">Connecting...</span>
           </button>
         )}

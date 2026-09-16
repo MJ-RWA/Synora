@@ -82,7 +82,7 @@ export const WatchParty = () => {
   useEffect(() => {
     const tickInterval = setInterval(() => {
       setPresenceTick(Date.now());
-    }, 3000);
+    }, 10000);
     return () => clearInterval(tickInterval);
   }, []);
 
@@ -174,6 +174,9 @@ export const WatchParty = () => {
   const isInitialMessagesLoad = useRef(true);
   const ytSyncFnRef = useRef<(() => void) | null>(null);
   const lastPublishedPlayback = useRef<{ playing: boolean; time: number; timestamp: number }>({ playing: false, time: 0, timestamp: 0 });
+  const lastTypingSentRef = useRef<number>(0);
+  const lastReactionSentRef = useRef<number>(0);
+  const syncedStaleUsersRef = useRef<Set<string>>(new Set());
 
   // Chrome Extension Bridge & Netflix Synchronization Engine (Phase 4 & 5)
   const extensionBridge = useExtensionBridge();
@@ -233,6 +236,14 @@ export const WatchParty = () => {
   const currentParticipant = liveUsers.find(u => (user?.uid && u.uid === user.uid) || u.id === effectiveUserId || u.username === username);
   const isHostMuted = Boolean(currentParticipant?.mutedByHost);
 
+  const showToast = useCallback((message: string) => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3500);
+  }, []);
+
   // Active watch time tracking and achievement progression
   useEffect(() => {
     if (!user?.uid || !room || !room.playing || !hasJoined) return;
@@ -248,7 +259,7 @@ export const WatchParty = () => {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [user?.uid, room, hasJoined, isHost]);
+  }, [user?.uid, room, hasJoined, isHost, showToast]);
 
   // Safely attach screen stream to video ref without triggering render cascades
   useEffect(() => {
@@ -266,14 +277,6 @@ export const WatchParty = () => {
       setShowHostScreenPreview(false);
     }
   }, [screenStream]);
-
-  const showToast = useCallback((message: string) => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, message }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3500);
-  }, []);
 
   const playJoinSound = () => {
     const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3');
@@ -592,7 +595,7 @@ export const WatchParty = () => {
       unsubscribeReactions();
       unsubscribeTyping();
     };
-  }, [cleanRoomId, user?.uid, authLoading, effectiveUserId, inviteRedeemTrigger, inviteCodeParam, queryUsername, initialRoomFromState]);
+  }, [cleanRoomId, user?.uid, authLoading, effectiveUserId, inviteRedeemTrigger, inviteCodeParam, queryUsername, initialRoomFromState, navigate, showToast]);
 
   // Real-time presence heartbeat & lifecycle tracking
   useEffect(() => {
@@ -638,9 +641,18 @@ export const WatchParty = () => {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('beforeunload', handleUnload);
       window.removeEventListener('pagehide', handleUnload);
-      markUserOffline(cleanRoomId, currentUid);
     };
   }, [cleanRoomId, hasJoined, effectiveUserId]);
+
+  // Ensure offline presence is recorded on unmount of WatchParty
+  useEffect(() => {
+    const currentUid = user?.uid || effectiveUserId;
+    return () => {
+      if (cleanRoomId && currentUid) {
+        markUserOffline(cleanRoomId, currentUid);
+      }
+    };
+  }, [cleanRoomId, user?.uid, effectiveUserId]);
 
   // Host periodic check to sync any stale timed-out participants to 'offline' in Firestore
   useEffect(() => {
@@ -649,11 +661,19 @@ export const WatchParty = () => {
     if (staleUsers.length > 0) {
       staleUsers.forEach(staleUser => {
         const uid = staleUser.id || staleUser.uid;
-        if (uid) {
+        if (uid && !syncedStaleUsersRef.current.has(uid)) {
+          syncedStaleUsersRef.current.add(uid);
           markUserOffline(cleanRoomId, uid);
         }
       });
     }
+    // Clean up users who returned to active live status
+    allRoomUsers.forEach(u => {
+      const uid = u.id || u.uid;
+      if (uid && isUserLive(u, presenceTick) && syncedStaleUsersRef.current.has(uid)) {
+        syncedStaleUsersRef.current.delete(uid);
+      }
+    });
   }, [isHost, cleanRoomId, allRoomUsers, presenceTick]);
 
   // Pre-fill default nickname from user profile or URL parameter without skipping the username prompt
@@ -975,7 +995,7 @@ export const WatchParty = () => {
     }
   }, [isHost, room?.playing, isScreenSharing, youtubeVideoId, isNetflixParty]);
 
-  // Host Periodic Heartbeat Sync (every 4s while playing)
+  // Host Periodic Heartbeat Sync (every 12s while playing; clients calculate continuous drift via updatedAt)
   useEffect(() => {
     if (!isHost || !cleanRoomId || isScreenSharing || youtubeVideoId || isNetflixParty) return;
 
@@ -984,7 +1004,7 @@ export const WatchParty = () => {
       if (video && !video.paused && !isRemoteSyncRef.current && !video.seeking) {
         updateRoomPlayback(true, video.currentTime);
       }
-    }, 4000);
+    }, 12000);
 
     return () => clearInterval(interval);
   }, [isHost, cleanRoomId, isScreenSharing, youtubeVideoId, isNetflixParty, updateRoomPlayback]);
@@ -1153,7 +1173,7 @@ export const WatchParty = () => {
         showToast(`Synchronized with host at ${formatTime(expectedPosition)}`);
       }
     },
-    [isHost, isNetflixParty, room?.netflixPlayback, autoSyncNetflix]
+    [isHost, isNetflixParty, room?.netflixPlayback, autoSyncNetflix, showToast]
   );
 
   useEffect(() => {
@@ -1491,8 +1511,12 @@ export const WatchParty = () => {
     };
   }, [room?.videoUrl, currentIsEmbed, youtubeVideoId]);
 
-  const handleTyping = async () => {
+  const handleTyping = useCallback(async () => {
     if (!cleanRoomId || !effectiveUserId) return;
+    const now = Date.now();
+    if (now - lastTypingSentRef.current < 3000) return;
+    lastTypingSentRef.current = now;
+
     try {
       await setDoc(doc(db, `watchRooms/${cleanRoomId}/typing`, effectiveUserId), {
         lastTyped: new Date().toISOString(),
@@ -1502,7 +1526,7 @@ export const WatchParty = () => {
     } catch (e) {
       console.warn("Error updating typing status:", e);
     }
-  };
+  }, [cleanRoomId, effectiveUserId, username]);
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1522,8 +1546,12 @@ export const WatchParty = () => {
     }
   };
 
-  const sendReaction = async (emoji: string) => {
+  const sendReaction = useCallback(async (emoji: string) => {
     if (!cleanRoomId) return;
+    const now = Date.now();
+    if (now - lastReactionSentRef.current < 400) return;
+    lastReactionSentRef.current = now;
+
     try {
       await addDoc(collection(db, `watchRooms/${cleanRoomId}/reactions`), {
         emoji,
@@ -1533,7 +1561,7 @@ export const WatchParty = () => {
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'send_reaction');
     }
-  };
+  }, [cleanRoomId, username]);
 
   const getRoomShareUrl = useCallback(() => {
     if (!cleanRoomId) return '';
@@ -2040,6 +2068,7 @@ export const WatchParty = () => {
                 onToast={showToast}
                 facingMode={cameraFacingMode}
                 onFacingModeChange={setCameraFacingMode}
+                isHostOnline={isHostOnline}
               />
             )}
             <button 
@@ -2675,11 +2704,13 @@ export const WatchParty = () => {
                 </div>
 
                 <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
-                  Host is offline
+                  {room?.isCameraActive || Boolean(cameraStream) ? 'Live Broadcast Paused' : 'Host is offline'}
                 </h3>
 
                 <p className="text-sm sm:text-base text-gray-300 max-w-md font-medium leading-relaxed mb-5">
-                  Playback is paused until the host returns.
+                  {room?.isCameraActive || Boolean(cameraStream)
+                    ? 'The live camera broadcast is paused until the host returns.'
+                    : 'Playback is paused until the host returns.'}
                 </p>
 
                 <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-400">

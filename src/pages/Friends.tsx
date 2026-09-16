@@ -26,9 +26,19 @@ export const Friends = () => {
         const data = snapshot.data() as User;
         if (data.friends && data.friends.length > 0) {
           try {
-            const friendsQuery = query(collection(db, 'users'), where('uid', 'in', data.friends));
-            const friendsSnap = await getDocs(friendsQuery);
-            setFriends(friendsSnap.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
+            // Firestore 'in' query allows max 30 items per batch. Chunk safely to avoid crashes.
+            const friendUids = data.friends.filter(Boolean);
+            const chunks: string[][] = [];
+            for (let i = 0; i < friendUids.length; i += 30) {
+              chunks.push(friendUids.slice(i, i + 30));
+            }
+            const allFriends: User[] = [];
+            for (const chunk of chunks) {
+              const friendsQuery = query(collection(db, 'users'), where('uid', 'in', chunk));
+              const friendsSnap = await getDocs(friendsQuery);
+              allFriends.push(...friendsSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)));
+            }
+            setFriends(allFriends);
           } catch (error) {
             handleFirestoreError(error, OperationType.GET, 'friends_list');
           }

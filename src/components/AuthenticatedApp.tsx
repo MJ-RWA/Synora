@@ -340,10 +340,9 @@ export const AuthenticatedApp: React.FC = () => {
           return;
         }
         if (isRoomInactiveFor24Hours(roomData)) {
-          // Automatically delete public rooms inactive for 24+ hours
-          deleteRoomPermanently(docSnap.id).catch((err) => {
-            console.warn('[AutoClean] Could not delete inactive room:', docSnap.id, err);
-          });
+          // Exclude inactive rooms from public listing immediately without concurrent stampede
+          purgeRoomFromLocalState(docSnap.id);
+          return;
         } else {
           rooms.push(roomData);
         }

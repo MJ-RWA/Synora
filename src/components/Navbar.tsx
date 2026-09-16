@@ -20,6 +20,7 @@ import { WatchPartyModal } from './WatchPartyModal';
 import { JoinPartyModal } from './JoinPartyModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
+import { UserMenu } from './UserMenu';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const Navbar = () => {

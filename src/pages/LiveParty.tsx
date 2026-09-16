@@ -33,7 +33,8 @@ import {
   Minimize,
   RefreshCw,
   Eye,
-  LogOut
+  LogOut,
+  Pause
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -73,6 +74,7 @@ export const LiveParty: React.FC = () => {
 
   // Presence & users
   const [roomUsers, setRoomUsers] = useState<WatchRoomUser[]>([]);
+  const [hasInitialUsersLoaded, setHasInitialUsersLoaded] = useState(false);
   const [presenceTick, setPresenceTick] = useState(0);
   const [showParticipantsModal, setShowParticipantsModal] = useState(false);
   const [activeSidebarTab, setActiveSidebarTab] = useState<'chat' | 'participants'>('chat');
@@ -95,6 +97,7 @@ export const LiveParty: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const lastReactionSentRef = useRef<number>(0);
 
   // Host detection: Strict rule matching WatchParty
   const isHost = useMemo(() => {
@@ -186,15 +189,65 @@ export const LiveParty: React.FC = () => {
         users.push({ id: docSnap.id, ...docSnap.data() } as WatchRoomUser);
       });
       setRoomUsers(users);
+      setHasInitialUsersLoaded(true);
     });
 
     return () => unsubscribe();
   }, [cleanRoomId]);
 
+  // Identify host participant from real-time participants subcollection
+  const hostParticipant = useMemo(() => {
+    if (!room) return null;
+    const hostId = room.cameraHostId || room.hostId || room.ownerId;
+    return roomUsers.find(u => (hostId && (u.uid === hostId || u.id === hostId)) || u.isHost) || null;
+  }, [roomUsers, room]);
+
+  // Determine if host is live using the real-time presence system as source of truth
+  // The host themselves are always considered online in their own active broadcast session
+  const isHostOnline = useMemo(() => {
+    if (isHost) return true;
+    if (!room) return false;
+    // Before initial users snapshot has finished loading, avoid flashing offline immediately
+    if (!hasInitialUsersLoaded) return true;
+    if (!hostParticipant) return false;
+    return isUserLive(hostParticipant, presenceTick);
+  }, [isHost, room, hasInitialUsersLoaded, hostParticipant, presenceTick]);
+
   // Active live participants
   const liveParticipants = useMemo(() => {
     return roomUsers.filter(u => isUserLive(u, presenceTick));
   }, [roomUsers, presenceTick]);
+
+  // Track previous host online state to notify participant and resume on reconnect
+  const prevHostOnlineRef = useRef<boolean>(true);
+
+  // RULE: The host is the broadcast authority. If the host is offline, live broadcast must be paused for participants.
+  useEffect(() => {
+    if (isHost || !hasInitialUsersLoaded) return;
+
+    if (!isHostOnline) {
+      // Pause video element if playing
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+      }
+    } else {
+      if (!prevHostOnlineRef.current) {
+        // Re-request camera broadcast stream from host
+        const targetHost = room?.cameraHostId || room?.hostId || 'host';
+        addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+          from: effectiveUserId,
+          to: targetHost,
+          type: 'camera-request',
+          time: new Date().toISOString(),
+        }).catch(() => {});
+      }
+      // Resume video playback if stream is available
+      if (videoRef.current && videoRef.current.paused && cameraStream) {
+        videoRef.current.play().catch(() => {});
+      }
+    }
+    prevHostOnlineRef.current = isHostOnline;
+  }, [isHost, hasInitialUsersLoaded, isHostOnline, cameraStream, cleanRoomId, effectiveUserId, room?.cameraHostId, room?.hostId]);
 
   // 3. User Presence Heartbeat
   useEffect(() => {
@@ -220,13 +273,23 @@ export const LiveParty: React.FC = () => {
       markUserOffline(cleanRoomId, effectiveUserId);
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
 
     return () => {
       clearInterval(interval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      markUserOffline(cleanRoomId, effectiveUserId);
+      window.removeEventListener('pagehide', handleBeforeUnload);
     };
   }, [cleanRoomId, hasJoined, effectiveUserId, username, isHost, user?.uid, user?.photoURL]);
+
+  // Ensure offline presence is recorded on unmount of LiveParty
+  useEffect(() => {
+    return () => {
+      if (cleanRoomId && effectiveUserId) {
+        markUserOffline(cleanRoomId, effectiveUserId);
+      }
+    };
+  }, [cleanRoomId, effectiveUserId]);
 
   // 4. Subscribe to Chat Messages
   useEffect(() => {
@@ -302,9 +365,13 @@ export const LiveParty: React.FC = () => {
     }
   };
 
-  // Send Reaction
-  const handleSendReaction = async (emoji: string) => {
+  // Send Reaction (throttled to max 1 per 400ms)
+  const handleSendReaction = useCallback(async (emoji: string) => {
     if (!cleanRoomId) return;
+    const now = Date.now();
+    if (now - lastReactionSentRef.current < 400) return;
+    lastReactionSentRef.current = now;
+
     const senderName = username.trim() || user?.displayName || 'User';
     try {
       await addDoc(collection(db, `watchRooms/${cleanRoomId}/reactions`), {
@@ -315,7 +382,7 @@ export const LiveParty: React.FC = () => {
     } catch (err) {
       console.warn('Failed to send reaction:', err);
     }
-  };
+  }, [cleanRoomId, username, user?.displayName]);
 
   // Copy share invite link
   const handleCopyLink = () => {
@@ -503,30 +570,49 @@ export const LiveParty: React.FC = () => {
       </AnimatePresence>
 
       {/* Top Header Bar */}
-      <header className="relative sm:sticky sm:top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-md px-3 sm:px-4 py-2 sm:py-2.5">
-        <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-            <Link
-              to="/"
-              className="p-1.5 sm:p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
-              title="Return home"
+      <header className="relative sm:sticky sm:top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-md px-2.5 sm:px-4 py-2 sm:py-2.5">
+        <div className="max-w-[1800px] mx-auto flex items-center gap-2 sm:gap-3 w-full">
+          {/* Back Navigation */}
+          <Link
+            to="/"
+            className="p-1.5 sm:p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
+            title="Return home"
+          >
+            <ArrowLeft size={16} />
+          </Link>
+
+          {/* LIVE / PAUSED Badge (Fixed-width, shrink-0) */}
+          <span
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[9px] sm:text-[10px] font-black uppercase tracking-wider shrink-0 whitespace-nowrap ${
+              !isHost && !isHostOnline && hasInitialUsersLoaded
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                : 'bg-red-500/20 border-red-500/40 text-red-400'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                !isHost && !isHostOnline && hasInitialUsersLoaded
+                  ? 'bg-amber-400 animate-pulse'
+                  : 'bg-red-500 animate-pulse'
+              }`}
+            />
+            {!isHost && !isHostOnline && hasInitialUsersLoaded ? 'PAUSED' : 'LIVE'}
+          </span>
+
+          {/* Room Title (Flexible-width: flex-1, flex-shrink: 1, min-w-0, overflow-hidden with text-overflow ellipsis) */}
+          <div className="flex flex-col min-w-0 flex-1 overflow-hidden justify-center">
+            <h1
+              className="text-xs sm:text-base font-black truncate text-white block w-full"
+              title={room.title}
             >
-              <ArrowLeft size={16} />
-            </Link>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 text-[9px] sm:text-[10px] font-black uppercase tracking-wider shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                  LIVE
-                </span>
-                <h1 className="text-xs sm:text-base font-black truncate">{room.title}</h1>
-              </div>
-              <p className="text-[10px] sm:text-[11px] text-gray-400 truncate">
-                Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span>
-              </p>
-            </div>
+              {room.title}
+            </h1>
+            <p className="text-[10px] sm:text-[11px] text-gray-400 truncate block w-full">
+              Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span>
+            </p>
           </div>
 
+          {/* Fixed-width action elements & status badges (shrink-0) */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {/* Camera Broadcast WebRTC Engine */}
             {cleanRoomId && (
@@ -544,16 +630,17 @@ export const LiveParty: React.FC = () => {
                 facingMode={cameraFacingMode}
                 onFacingModeChange={setCameraFacingMode}
                 autoStart={isHost}
+                isHostOnline={isHostOnline}
               />
             )}
 
             {/* Live Viewers Count */}
             <button
               onClick={() => setShowParticipantsModal(true)}
-              className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0"
+              className="flex items-center gap-1 px-1.5 sm:px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0 whitespace-nowrap"
               title="View participants"
             >
-              <Eye size={13} className="text-emerald-400" />
+              <Eye size={13} className="text-emerald-400 shrink-0" />
               <span>{liveParticipants.length}</span>
               <span className="hidden sm:inline text-gray-400">watching</span>
             </button>
@@ -561,20 +648,20 @@ export const LiveParty: React.FC = () => {
             {/* Share Link */}
             <button
               onClick={handleCopyLink}
-              className="flex items-center gap-1 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0"
+              className="flex items-center gap-1 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0 whitespace-nowrap"
               title="Share invite link"
             >
-              {copied ? <Check size={14} className="text-emerald-400" /> : <Share2 size={14} />}
+              {copied ? <Check size={14} className="text-emerald-400 shrink-0" /> : <Share2 size={14} className="shrink-0" />}
               <span className="hidden sm:inline">{copied ? 'Copied' : 'Share'}</span>
             </button>
 
             {/* Leave Room Button */}
             <button
               onClick={isHost ? handleEndStream : handleLeaveRoom}
-              className="p-1.5 sm:px-3 sm:py-1.5 bg-red-600/80 hover:bg-red-500 rounded-xl text-xs font-bold text-white transition-all shadow-md cursor-pointer flex items-center gap-1 shrink-0"
+              className="p-1.5 sm:px-3 sm:py-1.5 bg-red-600/80 hover:bg-red-500 rounded-xl text-xs font-bold text-white transition-all shadow-md cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap"
               title={isHost ? 'End live broadcast' : 'Leave room'}
             >
-              <LogOut size={13} />
+              <LogOut size={13} className="shrink-0" />
               <span className="hidden sm:inline">{isHost ? 'End Live' : 'Leave'}</span>
             </button>
           </div>
@@ -627,8 +714,58 @@ export const LiveParty: React.FC = () => {
                 </span>
               </div>
 
-              {/* Waiting / Connecting Overlay if video stream not ready yet */}
-              {!cameraStream && (
+              {/* Host Offline Prompt Overlay (When host disconnects, causing a pause in live broadcast) */}
+              {!isHost && !isHostOnline && hasInitialUsersLoaded && (
+                <div
+                  id="host-offline-broadcast-overlay"
+                  className="absolute inset-0 z-30 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center select-none"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-4 shadow-xl shadow-amber-950/40">
+                    <Pause size={32} className="fill-amber-400/20" />
+                  </div>
+
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs font-bold mb-3 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                    <span>Host is offline</span>
+                  </div>
+
+                  <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
+                    Live Broadcast Paused
+                  </h3>
+
+                  <p className="text-sm sm:text-base text-gray-300 max-w-md font-medium leading-relaxed mb-5">
+                    The host is currently offline. The live camera broadcast is paused until <strong className="text-white">{room.hostName || 'the host'}</strong> returns.
+                  </p>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-gray-400">
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      <span>Waiting for host to reconnect</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetHost = room.cameraHostId || room.hostId || 'host';
+                        addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                          from: effectiveUserId,
+                          to: targetHost,
+                          type: 'camera-request',
+                          time: new Date().toISOString(),
+                        }).catch(() => {});
+                        showToast('Checking host connection...');
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-gray-200 hover:text-white transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={13} className="text-amber-400" />
+                      <span>Retry Connection</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Waiting / Connecting Overlay if video stream not ready yet (Only when host is online) */}
+              {!cameraStream && (isHost || isHostOnline || !hasInitialUsersLoaded) && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 bg-black/85 backdrop-blur-sm text-center space-y-3">
                   <RefreshCw size={32} className="animate-spin text-emerald-400" />
                   <div className="space-y-1">
@@ -665,7 +802,7 @@ export const LiveParty: React.FC = () => {
 
               {/* Video Overlay Controls: Audio Unmute & Fullscreen */}
               <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
-                {!isHost && (
+                {!isHost && isHostOnline && (
                   isCameraAudioMuted ? (
                     <button
                       type="button"

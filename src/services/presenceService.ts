@@ -2,8 +2,12 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { WatchRoomUser } from '../types';
 
-export const HEARTBEAT_INTERVAL_MS = 10000; // 10 seconds
-export const HEARTBEAT_TIMEOUT_MS = 25000;  // 25 seconds timeout
+export const HEARTBEAT_INTERVAL_MS = 20000; // 20 seconds
+export const HEARTBEAT_TIMEOUT_MS = 50000;  // 50 seconds timeout
+
+// In-memory throttle tracker to protect Firestore from redundant writes under load
+const lastHeartbeatSent: Record<string, number> = {};
+const lastOfflineSent: Record<string, number> = {};
 
 /**
  * Checks if a room participant is currently LIVE / actively watching.
@@ -38,17 +42,31 @@ export function isUserLive(
 
 /**
  * Sends a periodic heartbeat to Firestore to refresh the user's presence.
+ * Throttled to at most once per 10s per user per room to prevent write amplification.
  */
 export async function sendHeartbeat(
   roomId: string,
   userId: string,
-  extra: Partial<WatchRoomUser> = {}
+  extra: Partial<WatchRoomUser> = {},
+  force: boolean = false
 ): Promise<void> {
   if (!roomId || !userId) return;
+  const key = `${roomId}:${userId}`;
+  const now = Date.now();
+  const lastTime = lastHeartbeatSent[key] || 0;
+
+  if (!force && (now - lastTime) < 10000) {
+    return;
+  }
+
+  lastHeartbeatSent[key] = now;
+  // Clear offline tracker since user is alive
+  delete lastOfflineSent[key];
+
   try {
     const userDocRef = doc(db, `watchRooms/${roomId}/users`, userId);
     await updateDoc(userDocRef, {
-      lastSeen: Date.now(),
+      lastSeen: now,
       connectionStatus: 'online',
       status: 'watching',
       ...extra
@@ -60,18 +78,29 @@ export async function sendHeartbeat(
 
 /**
  * Marks a user as disconnected / offline without removing them from the room.
+ * Throttled to avoid duplicate offline writes within 10 seconds.
  */
 export async function markUserOffline(
   roomId: string,
   userId: string
 ): Promise<void> {
   if (!roomId || !userId) return;
+  const key = `${roomId}:${userId}`;
+  const now = Date.now();
+  const lastOffline = lastOfflineSent[key] || 0;
+
+  if ((now - lastOffline) < 10000) {
+    return;
+  }
+  lastOfflineSent[key] = now;
+  delete lastHeartbeatSent[key];
+
   try {
     const userDocRef = doc(db, `watchRooms/${roomId}/users`, userId);
     await updateDoc(userDocRef, {
       connectionStatus: 'offline',
       status: 'offline',
-      lastSeen: Date.now()
+      lastSeen: now
     });
   } catch (error) {
     console.debug('Mark offline non-fatal:', error);
