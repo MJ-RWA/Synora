@@ -16,6 +16,7 @@ export interface CameraBroadcastProps {
   onToast?: (message: string) => void;
   facingMode?: 'user' | 'environment';
   onFacingModeChange?: (mode: 'user' | 'environment') => void;
+  autoStart?: boolean;
 }
 
 const getIceServers = (): RTCConfiguration => {
@@ -59,6 +60,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   onToast,
   facingMode = 'user',
   onFacingModeChange,
+  autoStart = false,
 }) => {
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -173,13 +175,19 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
     pc.ontrack = (event) => {
       console.debug(`[CameraBroadcast] Received remote track (${event.track.kind}):`, event.track.id);
+      const incomingStream = event.streams && event.streams[0] ? event.streams[0] : null;
       let stream = remoteStreams.current[targetUserId];
-      if (!stream) {
-        stream = new MediaStream();
-        remoteStreams.current[targetUserId] = stream;
-      }
-      if (!stream.getTracks().some(t => t.id === event.track.id)) {
-        stream.addTrack(event.track);
+      if (incomingStream) {
+        remoteStreams.current[targetUserId] = incomingStream;
+        stream = incomingStream;
+      } else {
+        if (!stream) {
+          stream = new MediaStream();
+          remoteStreams.current[targetUserId] = stream;
+        }
+        if (!stream.getTracks().some(t => t.id === event.track.id)) {
+          stream.addTrack(event.track);
+        }
       }
       setIsConnecting(false);
       if (onStreamReadyRef.current) {
@@ -207,6 +215,19 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
     try {
       const pc = getOrCreatePeerConnection(targetUserId);
+      if (localStreamRef.current) {
+        const senders = pc.getSenders();
+        localStreamRef.current.getTracks().forEach(track => {
+          if (!senders.some(s => s.track && s.track.kind === track.kind)) {
+            try {
+              pc.addTrack(track, localStreamRef.current!);
+            } catch (e) {
+              console.debug('[CameraBroadcast] Add track error in sendOffer:', e);
+            }
+          }
+        });
+      }
+
       offerTimestamps.current[targetUserId] = Date.now();
 
       const offer = await pc.createOffer({
@@ -384,6 +405,14 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           type: 'camera-request',
           time: new Date().toISOString(),
         });
+        if (targetHost !== 'host') {
+          await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+            from: myId,
+            to: 'host',
+            type: 'camera-request',
+            time: new Date().toISOString(),
+          }).catch(() => {});
+        }
         console.debug('[CameraBroadcast] Viewer sent camera-request');
       } catch (err) {
         console.debug('Failed to send camera-request:', err);
@@ -503,6 +532,19 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
       if (onToast) onToast(newMuted ? 'Microphone muted' : 'Microphone unmuted');
     }
   };
+
+  // Host autoStart broadcasting when requested (e.g. Live Broadcast)
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    if (autoStart && isHost && !isBroadcasting && !localStreamRef.current && !error) {
+      timeoutId = setTimeout(() => {
+        startBroadcasting(currentFacingMode);
+      }, 0);
+    }
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [autoStart, isHost, isBroadcasting, error, currentFacingMode, startBroadcasting]);
 
   // Auto clean up on component unmount
   useEffect(() => {

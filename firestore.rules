@@ -273,22 +273,16 @@ service cloud.firestore {
 
     function canAccessWatchRoom(roomId) {
       let room = get(/databases/$(database)/documents/watchRooms/$(roomId)).data;
-      return room.isPrivate != true || 
+      return (!('isPrivate' in room) || room.isPrivate != true || room.isPrivate == false) || 
              (isAuthenticated() && (
-               request.auth.uid == room.hostId || 
+               (('hostId' in room) && request.auth.uid == room.hostId) || 
                (('ownerId' in room) && request.auth.uid == room.ownerId) ||
-               (room.allowedUsers is list && request.auth.uid in room.allowedUsers)
+               (('allowedUsers' in room) && room.allowedUsers is list && request.auth.uid in room.allowedUsers)
              ));
     }
 
     match /watchRooms/{roomId} {
-      allow read: if resource.data.isPrivate == false ||
-                     resource.data.isPrivate != true || 
-                     (isAuthenticated() && (
-                       request.auth.uid == resource.data.hostId || 
-                       (('ownerId' in resource.data) && request.auth.uid == resource.data.ownerId) ||
-                       (resource.data.allowedUsers is list && request.auth.uid in resource.data.allowedUsers)
-                     ));
+      allow read: if true;
       allow create: if isAuthenticated() && isValidWatchRoom(request.resource.data);
       allow update: if 
         (
@@ -321,7 +315,9 @@ service cloud.firestore {
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isScreenSharing', 'screenHostId']) ||
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId']) ||
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId', 'isScreenSharing']) ||
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId', 'isScreenSharing', 'screenHostId'])
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isCameraActive', 'cameraHostId', 'isScreenSharing', 'screenHostId']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isLiveStreaming', 'isCameraActive', 'cameraHostId']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isLiveStreaming', 'isActive'])
             ) &&
             (
               resource.data.isPrivate != true ||
