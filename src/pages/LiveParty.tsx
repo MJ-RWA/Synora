@@ -503,31 +503,31 @@ export const LiveParty: React.FC = () => {
       </AnimatePresence>
 
       {/* Top Header Bar */}
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-black/80 backdrop-blur-md px-4 py-2.5 sm:py-3">
-        <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="relative sm:sticky sm:top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-md px-3 sm:px-4 py-2 sm:py-2.5">
+        <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             <Link
               to="/"
-              className="p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
+              className="p-1.5 sm:p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
               title="Return home"
             >
-              <ArrowLeft size={18} />
+              <ArrowLeft size={16} />
             </Link>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 text-[10px] font-black uppercase tracking-wider shrink-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 text-[9px] sm:text-[10px] font-black uppercase tracking-wider shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
                   LIVE
                 </span>
-                <h1 className="text-sm sm:text-base font-black truncate">{room.title}</h1>
+                <h1 className="text-xs sm:text-base font-black truncate">{room.title}</h1>
               </div>
-              <p className="text-[11px] text-gray-400 truncate">
+              <p className="text-[10px] sm:text-[11px] text-gray-400 truncate">
                 Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {/* Camera Broadcast WebRTC Engine */}
             {cleanRoomId && (
               <CameraBroadcast
@@ -550,10 +550,10 @@ export const LiveParty: React.FC = () => {
             {/* Live Viewers Count */}
             <button
               onClick={() => setShowParticipantsModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0"
               title="View participants"
             >
-              <Eye size={14} className="text-emerald-400" />
+              <Eye size={13} className="text-emerald-400" />
               <span>{liveParticipants.length}</span>
               <span className="hidden sm:inline text-gray-400">watching</span>
             </button>
@@ -561,7 +561,7 @@ export const LiveParty: React.FC = () => {
             {/* Share Link */}
             <button
               onClick={handleCopyLink}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer"
+              className="flex items-center gap-1 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-gray-300 transition-all cursor-pointer shrink-0"
               title="Share invite link"
             >
               {copied ? <Check size={14} className="text-emerald-400" /> : <Share2 size={14} />}
@@ -571,7 +571,7 @@ export const LiveParty: React.FC = () => {
             {/* Leave Room Button */}
             <button
               onClick={isHost ? handleEndStream : handleLeaveRoom}
-              className="px-3 py-1.5 bg-red-600/80 hover:bg-red-500 rounded-xl text-xs font-bold text-white transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+              className="p-1.5 sm:px-3 sm:py-1.5 bg-red-600/80 hover:bg-red-500 rounded-xl text-xs font-bold text-white transition-all shadow-md cursor-pointer flex items-center gap-1 shrink-0"
               title={isHost ? 'End live broadcast' : 'Leave room'}
             >
               <LogOut size={13} />
@@ -582,15 +582,15 @@ export const LiveParty: React.FC = () => {
       </header>
 
       {/* Main Layout Grid matching WatchParty */}
-      <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
+      <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
         {/* Left Column (3 cols on desktop): Video Player Stage & Studio Controls */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="lg:col-span-3 space-y-3 sm:space-y-4">
           {/* Video Player Stage (Sticky on mobile for continuous viewing while scrolling) */}
           <div
             id="video-player-stage"
             data-video-stage="true"
             ref={playerContainerRef}
-            className="sticky top-[53px] sm:top-0 z-40 w-full aspect-video bg-black shadow-2xl border-b lg:border border-white/10 select-none lg:relative lg:top-auto lg:z-auto lg:aspect-video lg:rounded-2xl lg:overflow-hidden group"
+            className="sticky top-0 z-40 w-full aspect-video bg-black shadow-2xl border-b lg:border border-white/10 select-none lg:relative lg:top-auto lg:z-auto lg:aspect-video lg:rounded-2xl lg:overflow-hidden group"
           >
             {/* Scrolled-to-fixed mobile indicator */}
             {isMobileScrolled && (
@@ -613,23 +613,26 @@ export const LiveParty: React.FC = () => {
                 autoPlay
                 playsInline
                 muted={isHost ? true : isCameraAudioMuted}
+                onLoadedMetadata={() => {
+                  videoRef.current?.play().catch(() => {});
+                }}
                 className={`w-full h-full object-contain ${isHost && cameraFacingMode === 'user' ? '-scale-x-100' : ''}`}
               />
 
               {/* Live Camera Badge */}
-              <div className="absolute top-4 left-4 bg-emerald-600 px-3 py-1 rounded-full flex items-center gap-2 shadow-lg z-20">
-                <Camera size={14} className="animate-pulse text-white" />
-                <span className="text-[10px] font-black uppercase tracking-widest text-white">
-                  {isHost ? 'Live Camera (Broadcasting)' : `${room.hostName}'s Camera`}
+              <div className="absolute top-3 left-3 sm:top-4 sm:left-4 bg-emerald-600/90 backdrop-blur-sm px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-lg z-20">
+                <Camera size={12} className="animate-pulse text-white" />
+                <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-white">
+                  {isHost ? 'Live Camera' : `${room.hostName}'s Camera`}
                 </span>
               </div>
 
               {/* Waiting / Connecting Overlay if video stream not ready yet */}
               {!cameraStream && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 bg-black/85 backdrop-blur-sm text-center space-y-3">
-                  <RefreshCw size={36} className="animate-spin text-emerald-400" />
+                  <RefreshCw size={32} className="animate-spin text-emerald-400" />
                   <div className="space-y-1">
-                    <h4 className="text-base font-black text-white">
+                    <h4 className="text-sm sm:text-base font-black text-white">
                       {isHost ? 'Initializing Camera Broadcast...' : 'Connecting to Live Stream...'}
                     </h4>
                     <p className="text-xs text-gray-400 max-w-xs">
@@ -638,11 +641,30 @@ export const LiveParty: React.FC = () => {
                         : `Receiving live broadcast from ${room.hostName}.`}
                     </p>
                   </div>
+                  {!isHost && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetHost = room.cameraHostId || room.hostId || 'host';
+                        addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                          from: effectiveUserId,
+                          to: targetHost,
+                          type: 'camera-request',
+                          time: new Date().toISOString(),
+                        }).catch(() => {});
+                        showToast('Re-requesting live stream...');
+                      }}
+                      className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-emerald-400 transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>Refresh Stream Connection</span>
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* Video Overlay Controls: Audio Unmute & Fullscreen */}
-              <div className="absolute bottom-4 right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
+              <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
                 {!isHost && (
                   isCameraAudioMuted ? (
                     <button
@@ -654,11 +676,11 @@ export const LiveParty: React.FC = () => {
                           videoRef.current.play().catch(() => {});
                         }
                       }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                      className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/90 hover:bg-amber-500 text-black shadow-lg backdrop-blur-sm transition-all cursor-pointer"
                       title="Click to unmute live audio"
                     >
-                      <VolumeX size={14} />
-                      <span>Unmute Audio</span>
+                      <VolumeX size={13} />
+                      <span>Unmute</span>
                     </button>
                   ) : (
                     <button
@@ -669,10 +691,10 @@ export const LiveParty: React.FC = () => {
                           setIsCameraAudioMuted(true);
                         }
                       }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                      className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
                       title="Mute live audio"
                     >
-                      <Volume2 size={14} />
+                      <Volume2 size={13} />
                       <span>Audio On</span>
                     </button>
                   )
@@ -681,10 +703,10 @@ export const LiveParty: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleToggleFullscreen}
-                  className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
+                  className="p-1.5 sm:p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/10 shadow-lg backdrop-blur-sm transition-all cursor-pointer"
                   title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 >
-                  {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
+                  {isFullscreen ? <Minimize size={13} /> : <Maximize size={13} />}
                 </button>
               </div>
 
@@ -713,28 +735,28 @@ export const LiveParty: React.FC = () => {
           </div>
 
           {/* Under-Video Broadcast Controls & Quick Reactions Bar */}
-          <div className="px-4 sm:px-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#121212] p-3 sm:p-4 rounded-2xl border border-white/5 shadow-xl">
+          <div className="mx-3 sm:mx-0 p-3 sm:p-4 rounded-2xl bg-[#121212] border border-white/5 shadow-xl flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             {/* Room Info */}
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-sm border border-emerald-500/30 shrink-0">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-sm border border-emerald-500/30 shrink-0">
                 {room.hostName.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-black text-white truncate">{room.title}</h3>
-                <p className="text-xs text-gray-400 truncate">
+                <h3 className="text-xs sm:text-sm font-black text-white truncate">{room.title}</h3>
+                <p className="text-[11px] text-gray-400 truncate">
                   Broadcaster: <span className="text-emerald-400 font-semibold">{room.hostName}</span>
                 </p>
               </div>
             </div>
 
             {/* Quick Emoji Reaction Buttons */}
-            <div className="flex items-center justify-center gap-1.5 sm:gap-2 bg-white/5 p-1.5 rounded-xl border border-white/5">
+            <div className="flex items-center justify-between sm:justify-center gap-1 sm:gap-2 bg-white/5 p-1 sm:p-1.5 rounded-xl border border-white/5 overflow-x-auto">
               {['👍', '😂', '🔥', '❤️', '👀', '🎉'].map(emoji => (
                 <button
                   key={emoji}
                   type="button"
                   onClick={() => handleSendReaction(emoji)}
-                  className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center hover:bg-white/10 rounded-xl transition-all hover:scale-110 active:scale-95 text-base sm:text-lg cursor-pointer"
+                  className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center hover:bg-white/10 rounded-xl transition-all hover:scale-110 active:scale-95 text-base sm:text-lg cursor-pointer shrink-0"
                   title={`Send ${emoji} reaction`}
                 >
                   {emoji}
@@ -747,7 +769,7 @@ export const LiveParty: React.FC = () => {
         {/* Right Column (1 col on desktop): Live Chat & People Sidebar */}
         <div
           id="liveparty-sidebar"
-          className="px-4 sm:px-0 lg:px-0 lg:col-span-1 flex flex-col h-[560px] sm:h-[620px] lg:h-[calc(100vh-120px)] bg-[#101010] border border-white/5 rounded-2xl overflow-hidden shadow-2xl"
+          className="mx-3 sm:mx-0 mb-4 sm:mb-6 lg:mb-0 lg:col-span-1 flex flex-col h-[460px] sm:h-[550px] lg:h-[calc(100vh-120px)] bg-[#101010] border border-white/5 rounded-2xl overflow-hidden shadow-2xl"
         >
           {/* Tabs: Chat vs People */}
           <div className="p-2.5 sm:p-3 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
@@ -848,19 +870,19 @@ export const LiveParty: React.FC = () => {
               </div>
 
               {/* Chat Input Form */}
-              <form onSubmit={handleSendMessage} className="p-3 border-t border-white/5 bg-white/[0.02] flex items-center gap-2">
+              <form onSubmit={handleSendMessage} className="p-2.5 sm:p-3 border-t border-white/5 bg-white/[0.02] flex items-center gap-2">
                 <input
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Send a chat message..."
                   maxLength={500}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-xl py-2.5 px-3.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl py-2 sm:py-2.5 px-3 sm:px-3.5 text-base sm:text-xs text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
                 />
                 <button
                   type="submit"
                   disabled={!newMessage.trim()}
-                  className="p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black transition-all disabled:opacity-40 disabled:hover:bg-emerald-500 cursor-pointer"
+                  className="p-2 sm:p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-black transition-all disabled:opacity-40 disabled:hover:bg-emerald-500 cursor-pointer shrink-0"
                   title="Send message"
                 >
                   <Send size={14} />

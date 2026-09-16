@@ -31,7 +31,16 @@ const getIceServers = (): RTCConfiguration => {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    { urls: 'stun:openrelay.metered.ca:80' },
+    {
+      urls: [
+        'stun:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ];
 
   if (customTurnUrl) {
@@ -75,6 +84,8 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   const processedSignals = useRef<Set<string>>(new Set());
   const offerTimestamps = useRef<{ [peerId: string]: number }>({});
   const lastRequestTimeRef = useRef<number>(0);
+  const pendingRequestsRef = useRef<Set<string>>(new Set());
+  const hasStreamReadyRef = useRef<boolean>(false);
 
   const onStreamReadyRef = useRef(onStreamReady);
   useEffect(() => {
@@ -106,6 +117,8 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     pendingCandidates.current = {};
     remoteStreams.current = {};
     offerTimestamps.current = {};
+    pendingRequestsRef.current.clear();
+    hasStreamReadyRef.current = false;
     if (onStreamReadyRef.current) onStreamReadyRef.current(null);
   }, []);
 
@@ -116,6 +129,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
       const candidatesToProcess = [...queue];
       delete pendingCandidates.current[peerId];
       candidatesToProcess.forEach(candidate => {
+        if (!candidate || !candidate.candidate) return;
         try {
           pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
             console.debug('[CameraBroadcast] ICE candidate add note:', err);
@@ -135,6 +149,16 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
     const pc = new RTCPeerConnection(getIceServers());
     peerConnections.current[targetUserId] = pc;
+
+    // Viewers declare receive-only transceivers for audio & video to guarantee SDP negotiation
+    if (!isHost) {
+      try {
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+      } catch (transceiverErr) {
+        console.debug('[CameraBroadcast] Transceiver note:', transceiverErr);
+      }
+    }
 
     pc.onicecandidate = (event) => {
       if (event.candidate && cleanRoomId && myId) {
@@ -170,28 +194,39 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
         delete pendingCandidates.current[targetUserId];
         delete remoteStreams.current[targetUserId];
         delete offerTimestamps.current[targetUserId];
+        hasStreamReadyRef.current = false;
       }
     };
 
     pc.ontrack = (event) => {
       console.debug(`[CameraBroadcast] Received remote track (${event.track.kind}):`, event.track.id);
-      const incomingStream = event.streams && event.streams[0] ? event.streams[0] : null;
       let stream = remoteStreams.current[targetUserId];
-      if (incomingStream) {
-        remoteStreams.current[targetUserId] = incomingStream;
-        stream = incomingStream;
-      } else {
-        if (!stream) {
-          stream = new MediaStream();
-          remoteStreams.current[targetUserId] = stream;
-        }
-        if (!stream.getTracks().some(t => t.id === event.track.id)) {
-          stream.addTrack(event.track);
-        }
+      if (!stream) {
+        stream = new MediaStream();
+        remoteStreams.current[targetUserId] = stream;
       }
+      if (!stream.getTracks().some(t => t.id === event.track.id)) {
+        stream.addTrack(event.track);
+      }
+
+      event.track.onended = () => {
+        console.debug(`[CameraBroadcast] Remote track ended (${event.track.kind})`);
+        const s = remoteStreams.current[targetUserId];
+        const live = s ? s.getTracks().filter(t => t.readyState === 'live') : [];
+        if (live.length === 0) {
+          hasStreamReadyRef.current = false;
+          delete remoteStreams.current[targetUserId];
+          if (onStreamReadyRef.current) {
+            onStreamReadyRef.current(null);
+          }
+        }
+      };
+
       setIsConnecting(false);
+      hasStreamReadyRef.current = true;
+      // Wrap in new MediaStream so React detects state reference change and mounts <video> srcObject!
       if (onStreamReadyRef.current) {
-        onStreamReadyRef.current(stream);
+        onStreamReadyRef.current(new MediaStream(stream.getTracks()));
       }
     };
 
@@ -276,11 +311,6 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           if (!data.type || !data.type.startsWith('camera-')) continue;
 
           if (processedSignals.current.has(docId)) continue;
-          processedSignals.current.add(docId);
-          if (processedSignals.current.size > 300) {
-            const stale = Array.from(processedSignals.current).slice(0, 100);
-            stale.forEach(k => processedSignals.current.delete(k));
-          }
 
           const fromPeer = data.from;
           if (!fromPeer || fromPeer === myId) {
@@ -290,7 +320,14 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
           try {
             if (data.type === 'camera-request') {
-              if (localStreamRef.current && isHost) {
+              if (isHost) {
+                // If local stream isn't ready yet, queue the peer request and do NOT drop it!
+                if (!localStreamRef.current) {
+                  pendingRequestsRef.current.add(fromPeer);
+                  continue;
+                }
+
+                processedSignals.current.add(docId);
                 console.debug(`[CameraBroadcast] Host received camera-request from ${fromPeer}`);
                 const existingPc = peerConnections.current[fromPeer];
                 const lastOfferTime = offerTimestamps.current[fromPeer] || 0;
@@ -301,7 +338,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
                   continue;
                 }
 
-                if (existingPc && timeSinceLast < 2500 && existingPc.connectionState !== 'failed') {
+                if (existingPc && timeSinceLast < 2000 && existingPc.connectionState !== 'failed') {
                   deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
                   continue;
                 }
@@ -317,22 +354,32 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
               }
             } else if (data.type === 'camera-offer') {
               if (!isHost) {
+                processedSignals.current.add(docId);
                 console.debug(`[CameraBroadcast] Viewer received camera-offer from ${fromPeer}`);
-                const pc = getOrCreatePeerConnection(fromPeer);
-                const offerDesc = JSON.parse(data.signal);
-
-                if (pc.signalingState !== 'stable') {
-                  try {
-                    await pc.setLocalDescription({ type: 'rollback' });
-                  } catch (e) {
-                    console.debug('Rollback error note:', e);
-                  }
+                let pc = peerConnections.current[fromPeer];
+                if (pc && pc.connectionState === 'connected' && hasStreamReadyRef.current) {
+                  deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
+                  continue;
                 }
 
-                await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
+                if (pc && pc.signalingState !== 'stable') {
+                  try { pc.close(); } catch { /* ignore */ }
+                  delete peerConnections.current[fromPeer];
+                  pc = undefined;
+                }
+
+                if (!pc) {
+                  pc = getOrCreatePeerConnection(fromPeer);
+                }
+
+                const offerDesc = new RTCSessionDescription(JSON.parse(data.signal));
+                await pc.setRemoteDescription(offerDesc);
                 drainPendingCandidates(fromPeer, pc);
 
-                const answer = await pc.createAnswer();
+                const answer = await pc.createAnswer({
+                  offerToReceiveVideo: true,
+                  offerToReceiveAudio: true,
+                });
                 await pc.setLocalDescription(answer);
 
                 await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
@@ -347,30 +394,34 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
               }
             } else if (data.type === 'camera-answer') {
               if (isHost) {
+                processedSignals.current.add(docId);
                 console.debug(`[CameraBroadcast] Host received camera-answer from ${fromPeer}`);
                 const pc = peerConnections.current[fromPeer];
                 if (pc && pc.signalingState === 'have-local-offer') {
-                  const answerDesc = JSON.parse(data.signal);
-                  await pc.setRemoteDescription(new RTCSessionDescription(answerDesc));
+                  const answerDesc = new RTCSessionDescription(JSON.parse(data.signal));
+                  await pc.setRemoteDescription(answerDesc);
                   drainPendingCandidates(fromPeer, pc);
                 }
                 deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
               }
             } else if (data.type === 'camera-candidate') {
+              processedSignals.current.add(docId);
               const pc = peerConnections.current[fromPeer];
               const candidate = JSON.parse(data.signal);
 
-              if (pc && pc.remoteDescription) {
-                try {
-                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                } catch (e) {
-                  console.debug('[CameraBroadcast] Candidate note:', e);
+              if (candidate && candidate.candidate) {
+                if (pc && pc.remoteDescription) {
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                  } catch (e) {
+                    console.debug('[CameraBroadcast] Candidate note:', e);
+                  }
+                } else {
+                  if (!pendingCandidates.current[fromPeer]) {
+                    pendingCandidates.current[fromPeer] = [];
+                  }
+                  pendingCandidates.current[fromPeer].push(candidate);
                 }
-              } else {
-                if (!pendingCandidates.current[fromPeer]) {
-                  pendingCandidates.current[fromPeer] = [];
-                }
-                pendingCandidates.current[fromPeer].push(candidate);
               }
               deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
             }
@@ -387,18 +438,21 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     };
   }, [cameraHostId, cleanRoomId, drainPendingCandidates, getOrCreatePeerConnection, isHost, myId, sendOffer, username]);
 
-  // Viewer: Request camera stream from host when camera is active
+  // Viewer: Continuously request camera stream until stream is established
   useEffect(() => {
-    if (isHost || !isCameraActive || !cleanRoomId) return;
+    if (isHost || !isCameraActive || !cleanRoomId || !myId) return;
 
-    const requestStream = async () => {
-      const targetHost = cameraHostId || 'host';
+    const targetHost = cameraHostId || 'host';
+
+    const sendRequest = async () => {
+      if (hasStreamReadyRef.current) return;
       const now = Date.now();
-      if (now - lastRequestTimeRef.current < 4000) return;
+      if (now - lastRequestTimeRef.current < 2000) return;
       lastRequestTimeRef.current = now;
 
       setIsConnecting(true);
       try {
+        console.debug(`[CameraBroadcast] Sending camera-request to ${targetHost}`);
         await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
           from: myId,
           to: targetHost,
@@ -413,25 +467,27 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
             time: new Date().toISOString(),
           }).catch(() => {});
         }
-        console.debug('[CameraBroadcast] Viewer sent camera-request');
       } catch (err) {
-        console.debug('Failed to send camera-request:', err);
+        console.debug('[CameraBroadcast] Failed to send camera-request:', err);
       }
     };
 
-    requestStream();
-    const interval = setInterval(() => {
-      const activeStream = Object.values(remoteStreams.current)[0];
-      if (!activeStream || activeStream.getTracks().length === 0) {
-        requestStream();
-      }
-    }, 6000);
+    sendRequest();
 
-    return () => clearInterval(interval);
+    // Periodic heartbeat request if stream is not established yet
+    const interval = setInterval(() => {
+      if (!hasStreamReadyRef.current) {
+        sendRequest();
+      }
+    }, 3500);
+
+    return () => {
+      clearInterval(interval);
+    };
   }, [cameraHostId, cleanRoomId, isCameraActive, isHost, myId]);
 
   // Host starts camera broadcasting
-  const startBroadcasting = async (desiredMode: 'user' | 'environment' = currentFacingMode) => {
+  const startBroadcasting = useCallback(async (desiredMode: 'user' | 'environment' = currentFacingMode) => {
     setError(null);
     try {
       let stream: MediaStream;
@@ -472,6 +528,15 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
         onStreamReadyRef.current(stream);
       }
 
+      // Immediately answer any pending viewer requests that arrived before camera was active!
+      if (pendingRequestsRef.current.size > 0) {
+        const waitingPeers = Array.from(pendingRequestsRef.current);
+        pendingRequestsRef.current.clear();
+        waitingPeers.forEach(peerId => {
+          sendOffer(peerId);
+        });
+      }
+
       // Update Firestore room status
       await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
         isCameraActive: true,
@@ -492,10 +557,10 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
       setError(msg);
       if (onToast) onToast(msg);
     }
-  };
+  }, [cleanRoomId, currentFacingMode, myId, onFacingModeChange, onSharingStateChange, onToast, sendOffer]);
 
   // Host stops camera broadcasting
-  const stopBroadcasting = async () => {
+  const stopBroadcasting = useCallback(async () => {
     cleanup();
     setIsBroadcasting(false);
     if (onSharingStateChange) onSharingStateChange(false);
@@ -509,7 +574,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     } catch (err) {
       console.debug('Failed to update camera state on stop:', err);
     }
-  };
+  }, [cleanRoomId, cleanup, onSharingStateChange, onToast]);
 
   // Flip front / rear camera
   const toggleFacingMode = async () => {
@@ -539,7 +604,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     if (autoStart && isHost && !isBroadcasting && !localStreamRef.current && !error) {
       timeoutId = setTimeout(() => {
         startBroadcasting(currentFacingMode);
-      }, 0);
+      }, 50);
     }
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -557,6 +622,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   useEffect(() => {
     if (!isCameraActive && !isHost && remoteStreams.current) {
       remoteStreams.current = {};
+      hasStreamReadyRef.current = false;
       if (onStreamReadyRef.current) {
         onStreamReadyRef.current(null);
       }
@@ -567,10 +633,11 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
   if (!isHost) {
     if (!isCameraActive) return null;
     return (
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
+      <div className="flex items-center gap-1.5">
+        <span className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold shrink-0">
           <Camera size={13} className="animate-pulse" />
-          <span>Host Live Camera</span>
+          <span className="hidden sm:inline">Host Live Camera</span>
+          <span className="sm:hidden">Live</span>
         </span>
         {isConnecting && (
           <button
@@ -583,11 +650,11 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
                 time: new Date().toISOString(),
               }).catch(() => {});
             }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-semibold border border-white/10"
+            className="flex items-center gap-1 px-2 py-1 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-semibold border border-white/10 shrink-0"
             title="Reconnect stream"
           >
             <RefreshCw size={12} className="animate-spin text-emerald-400" />
-            <span>Connecting...</span>
+            <span className="hidden sm:inline">Connecting...</span>
           </button>
         )}
       </div>
@@ -596,7 +663,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
   // HOST CONTROLS
   return (
-    <div className="flex items-center gap-1.5 sm:gap-2">
+    <div className="flex items-center gap-1 sm:gap-2 shrink-0">
       {error && (
         <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-red-400">
           <AlertCircle size={12} /> {error}
@@ -608,7 +675,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           <button
             type="button"
             onClick={stopBroadcasting}
-            className="flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-red-950/40"
+            className="flex items-center gap-1.5 p-2 sm:px-3 sm:py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-red-950/40 cursor-pointer shrink-0"
             title="Stop camera broadcast"
           >
             <CameraOff size={14} />
@@ -618,7 +685,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           <button
             type="button"
             onClick={toggleFacingMode}
-            className="p-1.5 sm:p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/10"
+            className="p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/10 cursor-pointer shrink-0"
             title={`Switch to ${currentFacingMode === 'user' ? 'rear' : 'front'} camera`}
           >
             <RefreshCw size={14} />
@@ -627,7 +694,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           <button
             type="button"
             onClick={toggleMic}
-            className={`p-1.5 sm:p-2 rounded-xl text-xs font-bold transition-all border ${
+            className={`p-2 rounded-xl text-xs font-bold transition-all border cursor-pointer shrink-0 ${
               isMuted
                 ? 'bg-red-500/20 text-red-400 border-red-500/40'
                 : 'bg-white/10 hover:bg-white/20 text-white border-white/10'
@@ -641,7 +708,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
         <button
           type="button"
           onClick={() => startBroadcasting('user')}
-          className="flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl text-xs font-black transition-all shadow-lg shadow-emerald-950/30 cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 sm:py-2 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl text-xs font-black transition-all shadow-lg shadow-emerald-950/30 cursor-pointer shrink-0"
           title="Broadcast your camera directly to the room's video player"
         >
           <Camera size={14} />
