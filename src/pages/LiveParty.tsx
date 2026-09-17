@@ -348,13 +348,26 @@ export const LiveParty: React.FC = () => {
 
   // Attach camera stream to video player
   useEffect(() => {
-    if (videoRef.current && cameraStream) {
-      if (videoRef.current.srcObject !== cameraStream) {
-        videoRef.current.srcObject = cameraStream;
+    const video = videoRef.current;
+    if (video && cameraStream) {
+      if (video.srcObject !== cameraStream) {
+        video.srcObject = cameraStream;
       }
-      videoRef.current.muted = isHost ? true : isCameraAudioMuted;
-      videoRef.current.playsInline = true;
-      videoRef.current.play().catch(() => {});
+      video.muted = isHost ? true : isCameraAudioMuted;
+      video.playsInline = true;
+      video.play().catch(() => {});
+
+      const resumePlayback = () => {
+        video.play().catch(() => {});
+      };
+      cameraStream.getVideoTracks().forEach(t => {
+        t.addEventListener('unmute', resumePlayback);
+      });
+      return () => {
+        cameraStream.getVideoTracks().forEach(t => {
+          t.removeEventListener('unmute', resumePlayback);
+        });
+      };
     }
   }, [cameraStream, isHost, isCameraAudioMuted]);
 

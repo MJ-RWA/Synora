@@ -121,13 +121,27 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
       let netflixPlayback = null;
 
       if (sourceType === 'custom') {
-        if (!customUrl.trim()) {
+        let clean = customUrl.trim();
+        if (!clean) {
           setError('Please provide a direct video URL (.mp4, .m3u8, etc.)');
           setCreating(false);
           isSubmittingRef.current = false;
           return;
         }
-        videoUrl = customUrl.trim();
+        // Auto-convert Google Drive view links to direct media stream
+        const gDriveMatch = clean.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+        if (gDriveMatch && gDriveMatch[1]) {
+          clean = `https://drive.google.com/uc?export=download&id=${gDriveMatch[1]}`;
+        }
+        // Auto-convert Dropbox dl=0 links to raw=1 for direct streaming
+        if (clean.includes('dropbox.com') && clean.includes('dl=0')) {
+          clean = clean.replace('dl=0', 'raw=1');
+        }
+        // Auto upgrade http to https if app origin is https to prevent Mixed Content blocking
+        if (window.location.protocol === 'https:' && clean.startsWith('http://')) {
+          clean = clean.replace('http://', 'https://');
+        }
+        videoUrl = clean;
         if (!finalTitle) finalTitle = `${finalName}'s Watch Party`;
       } else if (sourceType === 'embed') {
         if (!customUrl.trim()) {

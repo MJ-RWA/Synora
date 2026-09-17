@@ -207,6 +207,12 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
         stream = new MediaStream();
         remoteStreams.current[targetUserId] = stream;
       }
+      // Replace any existing track of the same kind to prevent stale frozen frames
+      stream.getTracks().forEach(t => {
+        if (t.kind === event.track.kind && t.id !== event.track.id) {
+          try { stream.removeTrack(t); } catch { /* ignore */ }
+        }
+      });
       if (!stream.getTracks().some(t => t.id === event.track.id)) {
         stream.addTrack(event.track);
       }
@@ -221,6 +227,23 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
           if (onStreamReadyRef.current) {
             onStreamReadyRef.current(null);
           }
+          // Immediately request camera reconnect from host
+          if (!isHost && cleanRoomId && myId) {
+            addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+              from: myId,
+              to: cameraHostId || 'host',
+              type: 'camera-request',
+              time: new Date().toISOString(),
+            }).catch(() => {});
+          }
+        }
+      };
+
+      event.track.onunmute = () => {
+        console.debug(`[CameraBroadcast] Remote track unmuted (${event.track.kind})`);
+        const s = remoteStreams.current[targetUserId];
+        if (s && onStreamReadyRef.current) {
+          onStreamReadyRef.current(new MediaStream(s.getTracks()));
         }
       };
 
@@ -244,7 +267,7 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     }
 
     return pc;
-  }, [cleanRoomId, drainPendingCandidates, isHost, myId]);
+  }, [cameraHostId, cleanRoomId, drainPendingCandidates, isHost, myId]);
 
   // Host sends WebRTC offer to target viewer
   const sendOffer = useCallback(async (targetUserId: string) => {
@@ -359,10 +382,6 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
                 processedSignals.current.add(docId);
                 console.debug(`[CameraBroadcast] Viewer received camera-offer from ${fromPeer}`);
                 let pc = peerConnections.current[fromPeer];
-                if (pc && pc.connectionState === 'connected' && hasStreamReadyRef.current) {
-                  deleteDoc(doc(db, `watchRooms/${cleanRoomId}/signals`, docId)).catch(() => {});
-                  continue;
-                }
 
                 if (pc && pc.signalingState !== 'stable') {
                   try { pc.close(); } catch { /* ignore */ }
@@ -578,13 +597,104 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     }
   }, [cleanRoomId, cleanup, onSharingStateChange, onToast]);
 
-  // Flip front / rear camera
+  // Flip front / rear camera seamlessly without freezing participants
   const toggleFacingMode = async () => {
     const nextMode = currentFacingMode === 'user' ? 'environment' : 'user';
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(t => t.stop());
+    try {
+      let newStream: MediaStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: nextMode,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: true,
+        });
+      } catch (err1) {
+        console.warn('[CameraBroadcast] High quality capture failed during flip:', err1);
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: nextMode },
+            audio: true,
+          });
+        } catch (err2) {
+          console.warn('[CameraBroadcast] Audio failed during flip, fallback to video only:', err2);
+          newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: nextMode },
+            audio: false,
+          });
+        }
+      }
+
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      const newAudioTracks = newStream.getAudioTracks();
+      const newAudioTrack = newAudioTracks.length > 0 ? newAudioTracks[0] : null;
+
+      // Preserve current microphone mute state
+      if (newAudioTrack) {
+        newAudioTrack.enabled = !isMuted;
+      }
+
+      // Seamlessly hot-swap video and audio tracks on all active peer connections
+      const activePeers = Object.keys(peerConnections.current);
+      for (const peerId of activePeers) {
+        const pc = peerConnections.current[peerId];
+        if (!pc || pc.connectionState === 'closed') continue;
+
+        let videoReplaced = false;
+        const senders = pc.getSenders();
+        for (const sender of senders) {
+          if (sender.track && sender.track.kind === 'video') {
+            try {
+              await sender.replaceTrack(newVideoTrack);
+              videoReplaced = true;
+            } catch (repErr) {
+              console.warn(`[CameraBroadcast] replaceTrack failed for peer ${peerId}:`, repErr);
+            }
+          } else if (newAudioTrack && sender.track && sender.track.kind === 'audio') {
+            try {
+              await sender.replaceTrack(newAudioTrack);
+            } catch (aRepErr) {
+              console.warn(`[CameraBroadcast] replaceTrack audio failed on peer ${peerId}:`, aRepErr);
+            }
+          }
+        }
+
+        // If video track couldn't be replaced on sender, add track & renegotiate offer
+        if (!videoReplaced && newVideoTrack) {
+          try {
+            pc.addTrack(newVideoTrack, newStream);
+            await sendOffer(peerId);
+          } catch (renegErr) {
+            console.warn(`[CameraBroadcast] Renegotiation offer error for peer ${peerId}:`, renegErr);
+          }
+        }
+      }
+
+      // Safely stop old tracks only AFTER hot-swapping
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+      }
+
+      localStreamRef.current = newStream;
+      setCurrentFacingMode(nextMode);
+      if (onFacingModeChange) onFacingModeChange(nextMode);
+      if (onStreamReadyRef.current) {
+        onStreamReadyRef.current(newStream);
+      }
+
+      if (onToast) onToast(`Switched to ${nextMode === 'user' ? 'front' : 'rear'} camera`);
+    } catch (err) {
+      console.error('[CameraBroadcast] Camera switch error:', err);
+      if (onToast) onToast('Failed to switch camera. Check camera permissions.');
     }
-    await startBroadcasting(nextMode);
   };
 
   // Toggle microphone

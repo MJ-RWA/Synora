@@ -7,7 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
 import Hls from 'hls.js';
-import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye, Camera } from 'lucide-react';
+import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye, Camera, Link as LinkIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
@@ -25,6 +25,16 @@ const getYouTubeVideoId = (url?: string): string | null => {
   if (!url) return null;
   const match = url.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/);
   return match ? match[1] : null;
+};
+
+const finalUrlIncludes = (url: string) => url.includes('%20');
+
+const encodeUrl = (url?: string) => {
+  if (!url) return undefined;
+  if (url.includes(' ') && !finalUrlIncludes(url)) {
+    return encodeURI(url);
+  }
+  return url;
 };
 
 export const WatchParty = () => {
@@ -127,6 +137,8 @@ export const WatchParty = () => {
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isChangeMovieModalOpen, setIsChangeMovieModalOpen] = useState(false);
+  const [isEditStreamModalOpen, setIsEditStreamModalOpen] = useState(false);
+  const [editStreamInput, setEditStreamInput] = useState('');
   const [isLeaveConfirmationOpen, setIsLeaveConfirmationOpen] = useState(false);
   const [isLeavingRoom, setIsLeavingRoom] = useState(false);
   const isRoomEnded = Boolean(room && room.isActive === false);
@@ -870,12 +882,11 @@ export const WatchParty = () => {
   const handleSwitchToWorkingSample = async () => {
     if (!cleanRoomId) return;
     const workingUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-    const workingTitle = 'Big Buck Bunny (Restored HD)';
     try {
       if (isHost) {
         await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
           videoUrl: workingUrl,
-          title: workingTitle,
+          // CRITICAL: Preserve room title! Never overwrite with Big Buck Bunny!
           currentTime: 0,
           playing: true,
           updatedAt: Date.now()
@@ -887,9 +898,52 @@ export const WatchParty = () => {
         }
       }
       setVideoLoadError(null);
-      showToast('Switched to working HD stream.');
+      showToast('Switched to test stream (room title preserved).');
     } catch (err) {
       console.error('Error switching stream:', err);
+    }
+  };
+
+  const handleRetryStream = () => {
+    setVideoLoadError(null);
+    const video = videoRef.current;
+    if (video && room?.videoUrl) {
+      const isHls = room.videoUrl.toLowerCase().includes('.m3u8');
+      if (!isHls) {
+        video.src = encodeUrl(room.videoUrl);
+        video.load();
+        video.play().catch(() => {});
+      }
+    }
+  };
+
+  const handleUpdateStreamUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cleanRoomId || !isHost || !editStreamInput.trim()) return;
+    try {
+      let clean = editStreamInput.trim();
+      const gDriveMatch = clean.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+      if (gDriveMatch && gDriveMatch[1]) {
+        clean = `https://drive.google.com/uc?export=download&id=${gDriveMatch[1]}`;
+      }
+      if (clean.includes('dropbox.com') && clean.includes('dl=0')) {
+        clean = clean.replace('dl=0', 'raw=1');
+      }
+      if (window.location.protocol === 'https:' && clean.startsWith('http://')) {
+        clean = clean.replace('http://', 'https://');
+      }
+      await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+        videoUrl: clean,
+        currentTime: 0,
+        playing: true,
+        updatedAt: Date.now()
+      });
+      setVideoLoadError(null);
+      setIsEditStreamModalOpen(false);
+      showToast('Stream URL updated successfully!');
+    } catch (err) {
+      console.error('Failed to update stream URL:', err);
+      showToast('Failed to update stream URL');
     }
   };
 
@@ -1476,7 +1530,11 @@ export const WatchParty = () => {
     if (!video || !room?.videoUrl || currentIsEmbed || youtubeVideoId) return;
 
     setVideoLoadError(null);
-    const hlsUrl = room.videoUrl;
+    const rawUrl = room.videoUrl.trim();
+    // Auto upgrade http to https if app origin is https to prevent Mixed Content blocking
+    const hlsUrl = (typeof window !== 'undefined' && window.location.protocol === 'https:' && rawUrl.startsWith('http://'))
+      ? rawUrl.replace('http://', 'https://')
+      : rawUrl;
     const isHls = hlsUrl.toLowerCase().includes('.m3u8');
     let hlsInstance: Hls | null = null;
 
@@ -1489,9 +1547,22 @@ export const WatchParty = () => {
         });
         hlsInstance.loadSource(hlsUrl);
         hlsInstance.attachMedia(video);
+        let errorRetryCount = 0;
         hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
           if (data.fatal) {
             console.warn("HLS fatal error encountered:", data);
+            if (errorRetryCount < 2) {
+              errorRetryCount++;
+              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                console.log("[HLS] Attempting network error recovery...");
+                hlsInstance?.startLoad();
+                return;
+              } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                console.log("[HLS] Attempting media error recovery...");
+                hlsInstance?.recoverMediaError();
+                return;
+              }
+            }
             setVideoLoadError("This stream source is currently offline or unavailable.");
           }
         });
@@ -1499,8 +1570,9 @@ export const WatchParty = () => {
         video.src = hlsUrl;
       }
     } else {
-      if (video.src !== hlsUrl) {
-        video.src = hlsUrl;
+      const targetSrc = encodeUrl(hlsUrl);
+      if (video.src !== targetSrc && video.currentSrc !== targetSrc) {
+        video.src = targetSrc;
       }
     }
 
@@ -1926,18 +1998,6 @@ export const WatchParty = () => {
         </div>
       </div>
     );
-  }
-
-  const encodeUrl = (url?: string) => {
-    if (!url) return undefined;
-    if (url.includes(' ') && !finalUrlIncludes(url)) {
-      return encodeURI(url);
-    }
-    return url;
-  };
-
-  function finalUrlIncludes(url: string) {
-    return url.includes('%20');
   }
 
   return (
@@ -2513,6 +2573,10 @@ export const WatchParty = () => {
                   onError={() => {
                     const video = videoRef.current;
                     if (!video || !room?.videoUrl) return;
+                    // Ignore abort error (code 1) which happens on video src re-assignment or reload
+                    if (video.error?.code === 1) {
+                      return;
+                    }
                     // Only display error if there's a genuine decode/network failure on an active source
                     if (video.error && video.src) {
                       console.warn("Video element reported decode error:", video.error);
@@ -2569,17 +2633,37 @@ export const WatchParty = () => {
                     </div>
                     <div className="flex flex-wrap items-center justify-center gap-3">
                       <button
-                        onClick={handleSwitchToWorkingSample}
+                        onClick={handleRetryStream}
                         className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center gap-2 shadow-lg transition-all"
                       >
-                        <Film size={14} /> Switch to Working Film (HD)
+                        <RefreshCw size={14} /> Retry Stream
                       </button>
                       {isHost && (
                         <button
-                          onClick={() => setIsChangeMovieModalOpen(true)}
-                          className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-xs font-bold border border-white/10 transition-all"
+                          onClick={() => {
+                            setEditStreamInput(room.videoUrl || '');
+                            setIsEditStreamModalOpen(true);
+                          }}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
                         >
-                          Change Video Source
+                          <LinkIcon size={14} /> Edit Stream Link
+                        </button>
+                      )}
+                      {isHost && (
+                        <button
+                          onClick={handleSwitchToWorkingSample}
+                          className="px-4 py-2 bg-white/10 hover:bg-white/15 text-gray-300 hover:text-white rounded-xl text-xs font-bold border border-white/10 transition-all flex items-center gap-1.5"
+                          title="Switch video source to a working sample film (keeps your room title intact)"
+                        >
+                          <Film size={14} /> Test with Sample Film
+                        </button>
+                      )}
+                      {isHost && (
+                        <button
+                          onClick={() => setIsChangeMovieModalOpen(true)}
+                          className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-xl text-xs font-bold border border-white/10 transition-all"
+                        >
+                          Movie Catalog
                         </button>
                       )}
                     </div>
@@ -3353,6 +3437,68 @@ export const WatchParty = () => {
                   </button>
                 ))}
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Stream Link Modal */}
+      <AnimatePresence>
+        {isEditStreamModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsEditStreamModalOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-[#1a1a1a] border border-white/10 rounded-[32px] p-6 sm:p-8 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
+                    <LinkIcon size={18} />
+                  </div>
+                  <h3 className="text-lg font-black text-white">Edit Stream Link</h3>
+                </div>
+                <button onClick={() => setIsEditStreamModalOpen(false)} className="p-2 hover:bg-white/5 rounded-full text-gray-500">
+                  <X size={18} />
+                </button>
+              </div>
+              <form onSubmit={handleUpdateStreamUrl} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-300 block mb-1.5">Direct Stream or Video URL</label>
+                  <input
+                    type="url"
+                    value={editStreamInput}
+                    onChange={(e) => setEditStreamInput(e.target.value)}
+                    placeholder="https://example.com/video.mp4 or .m3u8"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-3.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                    required
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1.5">Supports direct MP4, WebM, and HLS (.m3u8) live streams.</p>
+                </div>
+                <div className="flex gap-3 justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditStreamModalOpen(false)}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-xs font-bold transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all"
+                  >
+                    Update Stream
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
