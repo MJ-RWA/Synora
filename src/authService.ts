@@ -2,6 +2,8 @@ import { auth, db } from './firebase';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
+  FacebookAuthProvider,
+  OAuthProvider,
   signOut,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -15,10 +17,22 @@ import {
 } from 'firebase/firestore';
 import { User } from './types';
 
+export const getPhotoUrl = (user: FirebaseUser): string | undefined => {
+  if (user.photoURL) return user.photoURL;
+  if (user.providerData && user.providerData.length > 0) {
+    for (const p of user.providerData) {
+      if (p.photoURL) return p.photoURL;
+    }
+  }
+  return undefined;
+};
+
 const createUserDoc = async (user: FirebaseUser, username?: string) => {
   try {
     const userRef = doc(db, 'users', user.uid);
     const isSuperAdminEmail = user.email === "believeinsomething2421@gmail.com";
+    const photoUrl = getPhotoUrl(user);
+    
     const newUser: Partial<User> = {
       username: username || user.displayName || (isSuperAdminEmail ? 'Admin' : 'User'),
       email: user.email || '',
@@ -28,17 +42,31 @@ const createUserDoc = async (user: FirebaseUser, username?: string) => {
       friends: [],
       createdAt: new Date().toISOString()
     };
+
+    if (photoUrl) {
+      newUser.avatarUrl = photoUrl;
+    }
+
     await setDoc(userRef, newUser, { merge: true });
   } catch (error) {
     console.warn("User document creation deferred or offline sync active:", error);
   }
 };
 
-const provider = new GoogleAuthProvider();
-// Force account selection to help with login issues
-provider.setCustomParameters({
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
   prompt: 'select_account'
 });
+
+const facebookProvider = new FacebookAuthProvider();
+facebookProvider.addScope('email');
+facebookProvider.addScope('public_profile');
+facebookProvider.setCustomParameters({
+  display: 'popup'
+});
+
+const instagramProvider = new OAuthProvider('instagram.com');
+instagramProvider.addScope('user_profile');
 
 let isLoginInProgress = false;
 
@@ -51,7 +79,7 @@ export const loginWithGoogle = async () => {
   console.log("Starting Google Login from domain:", window.location.hostname);
   isLoginInProgress = true;
   try {
-    const result = await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, googleProvider);
     await createUserDoc(result.user);
     return result.user;
   } catch (err: unknown) {
@@ -84,6 +112,106 @@ export const loginWithGoogle = async () => {
   } finally {
     isLoginInProgress = false;
   }
+};
+
+export const loginWithFacebook = async () => {
+  if (isLoginInProgress) {
+    console.warn("Login already in progress...");
+    return;
+  }
+
+  console.log("Starting Facebook Login from domain:", window.location.hostname);
+  isLoginInProgress = true;
+  try {
+    const result = await signInWithPopup(auth, facebookProvider);
+    await createUserDoc(result.user);
+    return result.user;
+  } catch (err: unknown) {
+    const error = err as AuthError;
+    console.error("Facebook Login Error:", error);
+
+    if (error.code === 'auth/popup-blocked') {
+      throw new Error("Facebook login popup was blocked. Please allow popups for this site or open the app in a new tab to sign in.", { cause: err });
+    } else if (error.code === 'auth/cancelled-popup-request') {
+      console.log("Popup request was cancelled.");
+    } else if (error.code === 'auth/popup-closed-by-user') {
+      console.log("Login popup was closed by user.");
+    } else if (error.code === 'auth/operation-not-allowed') {
+      throw new Error("Facebook Login is not yet enabled in Firebase Console. Enable Facebook under Firebase Authentication > Sign-in method.", { cause: err });
+    } else if (error.code === 'auth/account-exists-with-different-credential') {
+      throw new Error("An account already exists with this email address using another sign-in provider.", { cause: err });
+    } else if (error.code === 'auth/unauthorized-domain') {
+      throw new Error("This domain is not authorized for Facebook login in Firebase. Please add this domain to Authorized Domains in Firebase Authentication.", { cause: err });
+    } else {
+      throw err;
+    }
+  } finally {
+    isLoginInProgress = false;
+  }
+};
+
+export const loginWithInstagram = async () => {
+  if (isLoginInProgress) {
+    console.warn("Login already in progress...");
+    return;
+  }
+
+  console.log("Starting Instagram Login from domain:", window.location.hostname);
+  isLoginInProgress = true;
+  try {
+    const result = await signInWithPopup(auth, instagramProvider);
+    await createUserDoc(result.user);
+    return result.user;
+  } catch (err: unknown) {
+    const error = err as AuthError;
+    console.error("Instagram Login Error:", error);
+
+    if (error.code === 'auth/popup-blocked') {
+      throw new Error("Instagram login popup was blocked. Please allow popups for this site or open the app in a new tab to sign in.", { cause: err });
+    } else if (error.code === 'auth/cancelled-popup-request') {
+      console.log("Popup request was cancelled.");
+    } else if (error.code === 'auth/popup-closed-by-user') {
+      console.log("Login popup was closed by user.");
+    } else if (error.code === 'auth/operation-not-allowed') {
+      throw new Error("Instagram OAuth is not yet enabled in Firebase Console. Configure the Instagram provider under Firebase Authentication.", { cause: err });
+    } else if (error.code === 'auth/account-exists-with-different-credential') {
+      throw new Error("An account already exists with this email address using another sign-in provider.", { cause: err });
+    } else if (error.code === 'auth/unauthorized-domain') {
+      throw new Error("This domain is not authorized for Instagram login in Firebase. Please add this domain to Authorized Domains in Firebase Authentication.", { cause: err });
+    } else {
+      throw err;
+    }
+  } finally {
+    isLoginInProgress = false;
+  }
+};
+
+export const updateUsername = async (newUsername: string) => {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("You must be logged in to update your username.");
+  const trimmed = newUsername.trim();
+  if (!trimmed) throw new Error("Username cannot be empty.");
+  if (trimmed.length < 2) throw new Error("Username must be at least 2 characters.");
+  if (trimmed.length > 30) throw new Error("Username cannot exceed 30 characters.");
+
+  // Update Firebase Auth profile displayName
+  await updateProfile(currentUser, { displayName: trimmed });
+
+  // Update Firestore user document
+  const userRef = doc(db, 'users', currentUser.uid);
+  await setDoc(userRef, { username: trimmed }, { merge: true });
+
+  return trimmed;
+};
+
+export const updateUserAvatar = async (avatarUrl: string) => {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("You must be logged in to update your avatar.");
+  const trimmed = avatarUrl.trim();
+
+  await updateProfile(currentUser, { photoURL: trimmed });
+  const userRef = doc(db, 'users', currentUser.uid);
+  await setDoc(userRef, { avatarUrl: trimmed }, { merge: true });
 };
 
 export const loginWithEmail = async (email: string, pass: string) => {

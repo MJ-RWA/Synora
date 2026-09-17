@@ -2190,6 +2190,43 @@ export const WatchParty = () => {
                       <p className="text-xs text-gray-400 mt-1 max-w-sm">Tap "Camera" in the bar above to start broadcasting your camera to the room.</p>
                     </div>
                   </div>
+                ) : !isHostOnline && hasInitialUsersLoaded ? (
+                  <div className="flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center shadow-lg">
+                      <Pause size={28} className="fill-amber-400/20" />
+                    </div>
+                    <div>
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold mb-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                        <span>Host Offline (Broadcast Paused)</span>
+                      </div>
+                      <h3 className="text-base font-bold text-white">Live Broadcast Paused</h3>
+                      <p className="text-xs text-gray-400 mt-1 max-w-xs">The host is currently offline. The broadcast will automatically resume when {room.hostName || 'the host'} returns.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (cleanRoomId) {
+                          const targetHost = room.cameraHostId || room.hostId || 'host';
+                          try {
+                            await addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                              from: effectiveUserId,
+                              to: targetHost,
+                              type: 'camera-request',
+                              time: new Date().toISOString(),
+                            });
+                            showToast('Checking if host has reconnected...');
+                          } catch (e) {
+                            console.warn('Manual camera retry error:', e);
+                          }
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all cursor-pointer"
+                    >
+                      <RefreshCw size={13} />
+                      <span>Check Connection</span>
+                    </button>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-4">
                     <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 text-emerald-400 flex items-center justify-center animate-pulse">

@@ -2,7 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { auth, db } from '../firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { loginWithGoogle, loginWithEmail, registerWithEmail, logout as firebaseLogout } from '../authService';
+import { 
+  loginWithGoogle, 
+  loginWithFacebook, 
+  loginWithInstagram, 
+  loginWithEmail, 
+  registerWithEmail, 
+  updateUsername as serviceUpdateUsername,
+  updateUserAvatar as serviceUpdateUserAvatar,
+  getPhotoUrl,
+  logout as firebaseLogout 
+} from '../authService';
 import { User } from '../types';
 import { AuthContext } from './auth-context';
 
@@ -25,10 +35,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (u) {
         const isSuperAdminEmail = u.email === "believeinsomething2421@gmail.com";
+        const photoUrl = getPhotoUrl(u);
         const fallbackUser: User = {
           uid: u.uid,
           username: u.displayName || (isSuperAdminEmail ? 'Admin' : 'User'),
           email: u.email || '',
+          avatarUrl: photoUrl || undefined,
           role: isSuperAdminEmail ? 'admin' : 'user',
           favorites: [],
           history: [],
@@ -44,7 +56,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             docRef,
             (docSnap) => {
               if (docSnap.exists()) {
-                setUserData({ uid: u.uid, ...docSnap.data() } as User);
+                const data = docSnap.data();
+                setUserData({ 
+                  uid: u.uid, 
+                  ...data,
+                  // Ensure photoUrl from provider is preserved if doc avatarUrl is not explicitly set
+                  avatarUrl: data.avatarUrl || photoUrl || undefined
+                } as User);
               }
             },
             (error) => {
@@ -69,6 +87,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  const handleUpdateUsername = async (newUsername: string) => {
+    const updated = await serviceUpdateUsername(newUsername);
+    // Optimistically update local state so UI updates instantaneously
+    if (user) {
+      setUser({ ...user, displayName: updated } as FirebaseUser);
+    }
+    setUserData(prev => prev ? { ...prev, username: updated } : null);
+    return updated;
+  };
+
+  const handleUpdateUserAvatar = async (newAvatarUrl: string) => {
+    await serviceUpdateUserAvatar(newAvatarUrl);
+    if (user) {
+      setUser({ ...user, photoURL: newAvatarUrl } as FirebaseUser);
+    }
+    setUserData(prev => prev ? { ...prev, avatarUrl: newAvatarUrl } : null);
+  };
+
   const isSuperAdmin = user?.email === "believeinsomething2421@gmail.com";
   const isAdmin = userData?.role === 'admin' || isSuperAdmin;
 
@@ -81,8 +117,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         isSuperAdmin,
         loginWithGoogle,
+        loginWithFacebook,
+        loginWithInstagram,
         loginWithEmail,
         registerWithEmail,
+        updateUsername: handleUpdateUsername,
+        updateUserAvatar: handleUpdateUserAvatar,
         logout: firebaseLogout
       }}
     >

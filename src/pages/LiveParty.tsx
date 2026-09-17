@@ -225,13 +225,23 @@ export const LiveParty: React.FC = () => {
   useEffect(() => {
     if (isHost || !hasInitialUsersLoaded) return;
 
+    let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
     if (!isHostOnline) {
       // Pause video element if playing
       if (videoRef.current && !videoRef.current.paused) {
         videoRef.current.pause();
       }
+      if (prevHostOnlineRef.current) {
+        toastTimer = setTimeout(() => {
+          showToast(`Host is offline: Live camera broadcast paused.`);
+        }, 0);
+      }
     } else {
       if (!prevHostOnlineRef.current) {
+        toastTimer = setTimeout(() => {
+          showToast(`Host reconnected! Resuming live broadcast...`);
+        }, 0);
         // Re-request camera broadcast stream from host
         const targetHost = room?.cameraHostId || room?.hostId || 'host';
         addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
@@ -247,7 +257,11 @@ export const LiveParty: React.FC = () => {
       }
     }
     prevHostOnlineRef.current = isHostOnline;
-  }, [isHost, hasInitialUsersLoaded, isHostOnline, cameraStream, cleanRoomId, effectiveUserId, room?.cameraHostId, room?.hostId]);
+
+    return () => {
+      if (toastTimer) clearTimeout(toastTimer);
+    };
+  }, [isHost, hasInitialUsersLoaded, isHostOnline, cameraStream, cleanRoomId, effectiveUserId, room?.cameraHostId, room?.hostId, showToast]);
 
   // 3. User Presence Heartbeat
   useEffect(() => {
@@ -570,49 +584,52 @@ export const LiveParty: React.FC = () => {
       </AnimatePresence>
 
       {/* Top Header Bar */}
-      <header className="relative sm:sticky sm:top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-md px-2.5 sm:px-4 py-2 sm:py-2.5">
-        <div className="max-w-[1800px] mx-auto flex items-center gap-2 sm:gap-3 w-full">
-          {/* Back Navigation */}
-          <Link
-            to="/"
-            className="p-1.5 sm:p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
-            title="Return home"
-          >
-            <ArrowLeft size={16} />
-          </Link>
-
-          {/* LIVE / PAUSED Badge (Fixed-width, shrink-0) */}
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[9px] sm:text-[10px] font-black uppercase tracking-wider shrink-0 whitespace-nowrap ${
-              !isHost && !isHostOnline && hasInitialUsersLoaded
-                ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
-                : 'bg-red-500/20 border-red-500/40 text-red-400'
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                !isHost && !isHostOnline && hasInitialUsersLoaded
-                  ? 'bg-amber-400 animate-pulse'
-                  : 'bg-red-500 animate-pulse'
-              }`}
-            />
-            {!isHost && !isHostOnline && hasInitialUsersLoaded ? 'PAUSED' : 'LIVE'}
-          </span>
-
-          {/* Room Title (Flexible-width: flex-1, flex-shrink: 1, min-w-0, overflow-hidden with text-overflow ellipsis) */}
-          <div className="flex flex-col min-w-0 flex-1 overflow-hidden justify-center">
-            <h1
-              className="text-xs sm:text-base font-black truncate text-white block w-full"
-              title={room.title}
+      <header className="relative sm:sticky sm:top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-md px-2 sm:px-4 py-2 sm:py-2.5">
+        <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-1.5 sm:gap-3 w-full overflow-hidden">
+          {/* Left: Back button + LIVE/PAUSED badge + Room Title (strictly flex-1 min-w-0 with clean ellipsis truncation) */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1 overflow-hidden mr-1">
+            {/* Back Navigation */}
+            <Link
+              to="/"
+              className="p-1 sm:p-2 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all shrink-0"
+              title="Return home"
             >
-              {room.title}
-            </h1>
-            <p className="text-[10px] sm:text-[11px] text-gray-400 truncate block w-full">
-              Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span>
-            </p>
+              <ArrowLeft size={16} />
+            </Link>
+
+            {/* LIVE / PAUSED Badge (Fixed-width, shrink-0) */}
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full border text-[9px] sm:text-[10px] font-black uppercase tracking-wider shrink-0 whitespace-nowrap ${
+                !isHost && !isHostOnline && hasInitialUsersLoaded
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                  : 'bg-red-500/20 border-red-500/40 text-red-400'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  !isHost && !isHostOnline && hasInitialUsersLoaded
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-red-500 animate-pulse'
+                }`}
+              />
+              {!isHost && !isHostOnline && hasInitialUsersLoaded ? 'PAUSED' : 'LIVE'}
+            </span>
+
+            {/* Room Title: strictly flex-1 min-w-0 with truncate block w-full */}
+            <div className="flex flex-col min-w-0 flex-1 overflow-hidden justify-center">
+              <h1
+                className="text-xs sm:text-base font-black truncate text-white block w-full leading-tight"
+                title={room.title}
+              >
+                {room.title}
+              </h1>
+              <p className="text-[10px] sm:text-[11px] text-gray-400 truncate block w-full leading-tight">
+                Hosted by <span className="text-emerald-400 font-semibold">{room.hostName}</span>
+              </p>
+            </div>
           </div>
 
-          {/* Fixed-width action elements & status badges (shrink-0) */}
+          {/* Right: Fixed-width action elements & status badges (shrink-0) */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {/* Camera Broadcast WebRTC Engine */}
             {cleanRoomId && (
@@ -667,6 +684,38 @@ export const LiveParty: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Participant Host-Offline Notification Banner */}
+      {!isHost && !isHostOnline && hasInitialUsersLoaded && (
+        <div 
+          id="host-offline-top-prompt" 
+          className="bg-amber-950/80 border-b border-amber-500/30 px-3 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between gap-3 text-amber-200 text-xs font-semibold z-40 backdrop-blur-md"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span className="truncate">
+              <strong>Broadcast Paused:</strong> Host <span className="text-white font-bold">{room.hostName || 'Broadcaster'}</span> is offline. Waiting for reconnection...
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const targetHost = room.cameraHostId || room.hostId || 'host';
+              addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
+                from: effectiveUserId,
+                to: targetHost,
+                type: 'camera-request',
+                time: new Date().toISOString(),
+              }).catch(() => {});
+              showToast('Checking for host signal...');
+            }}
+            className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1 whitespace-nowrap"
+          >
+            <RefreshCw size={12} className="shrink-0" />
+            <span>Check Host</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Layout Grid matching WatchParty */}
       <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">

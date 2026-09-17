@@ -6,10 +6,12 @@ import {
   LayoutDashboard, 
   LogOut, 
   ChevronDown, 
-  Sparkles,
-  Download
+  Download,
+  Chrome,
+  Facebook,
+  Instagram
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../hooks/useAuth';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 
@@ -58,6 +60,12 @@ export const UserMenu: React.FC<UserMenuProps> = ({ className = '' }) => {
   
   const isGoogleConnected = user.providerData?.some(
     (p) => p.providerId === 'google.com'
+  );
+  const isFacebookConnected = user.providerData?.some(
+    (p) => p.providerId === 'facebook.com'
+  );
+  const isInstagramConnected = user.providerData?.some(
+    (p) => p.providerId === 'instagram.com'
   );
 
   return (
@@ -139,12 +147,24 @@ export const UserMenu: React.FC<UserMenuProps> = ({ className = '' }) => {
                   <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                     {isGoogleConnected && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        Google Connected
+                        <Chrome size={10} className="text-emerald-400" />
+                        Google
+                      </span>
+                    )}
+                    {isFacebookConnected && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-semibold">
+                        <Facebook size={10} className="text-blue-400 fill-current" />
+                        Facebook
+                      </span>
+                    )}
+                    {isInstagramConnected && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-pink-500/10 border border-pink-500/20 text-pink-400 text-[10px] font-semibold">
+                        <Instagram size={10} className="text-pink-400" />
+                        Instagram
                       </span>
                     )}
                     {isAdmin && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-semibold uppercase tracking-wider">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-semibold uppercase tracking-wider">
                         Admin
                       </span>
                     )}

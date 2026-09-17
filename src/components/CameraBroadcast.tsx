@@ -637,19 +637,23 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     return (
       <div className="flex items-center gap-1.5 shrink-0">
         <span
-          className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl border text-xs font-bold shrink-0 whitespace-nowrap ${
+          className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl border text-[11px] sm:text-xs font-bold shrink-0 whitespace-nowrap ${
             isHostOnline === false
               ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
               : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
           }`}
+          title={isHostOnline === false ? 'Host is offline (Broadcast paused)' : 'Host Live Camera'}
         >
           {isHostOnline === false ? (
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
           ) : (
-            <Camera size={13} className="animate-pulse shrink-0" />
+            <Camera size={13} className="animate-pulse shrink-0 text-emerald-400" />
           )}
-          <span className="whitespace-nowrap">
+          <span className="hidden sm:inline whitespace-nowrap">
             {isHostOnline === false ? 'Host Offline (Paused)' : 'Host Live Camera'}
+          </span>
+          <span className="sm:hidden whitespace-nowrap">
+            {isHostOnline === false ? 'Host Offline' : 'Host Live'}
           </span>
         </span>
         {isConnecting && isHostOnline !== false && (

@@ -21,10 +21,10 @@ import { JoinPartyModal } from './JoinPartyModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 import { UserMenu } from './UserMenu';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const Navbar = () => {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, userData, logout, isAdmin } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createModalTab, setCreateModalTab] = useState<'embed' | 'custom' | 'screen' | 'netflix' | 'live'>('embed');
@@ -100,7 +100,7 @@ export const Navbar = () => {
                 {user && (
                   <Link 
                     to="/friends" 
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                    className={`hidden 2xl:flex px-3 py-1.5 rounded-xl text-xs font-bold items-center gap-1.5 transition-all ${
                       isActive('/friends') 
                         ? 'bg-emerald-500/15 text-emerald-400 dark:text-emerald-400 font-black' 
                         : 'text-gray-400 hover:text-white hover:bg-white/5'
@@ -160,39 +160,10 @@ export const Navbar = () => {
               </div>
 
               {user ? (
-                <>
-                  <div className="hidden sm:block h-5 w-px bg-white/10 shrink-0 mx-0.5" />
-
+                <div className="flex items-center gap-2 shrink-0">
                   <Notifications />
-                  
-                  {isAdmin && (
-                    <Link 
-                      to="/admin" 
-                      className="hidden xl:flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-2.5 py-1.5 rounded-lg border border-emerald-500/30 transition-all text-[10px] font-black uppercase tracking-widest shrink-0"
-                    >
-                      <LayoutDashboard size={13} /> Admin
-                    </Link>
-                  )}
-
-                  <Link 
-                    to="/profile" 
-                    className="w-9 h-9 rounded-xl bg-emerald-600 hover:bg-emerald-500 flex items-center justify-center text-white font-black shadow-md shadow-emerald-950/20 hover:scale-105 transition-all text-xs shrink-0"
-                    title="Your Profile"
-                    aria-label="Your Profile"
-                  >
-                    {user.displayName?.[0] || 'U'}
-                  </Link>
-
-                  <button 
-                    type="button"
-                    onClick={logout} 
-                    className="w-9 h-9 rounded-xl flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-colors shrink-0"
-                    title="Logout"
-                    aria-label="Logout"
-                  >
-                    <LogOut size={16} />
-                  </button>
-                </>
+                  <UserMenu />
+                </div>
               ) : (
                 <div className="flex items-center gap-2 shrink-0">
                   <Link 
@@ -225,6 +196,34 @@ export const Navbar = () => {
               className="md:hidden border-t border-white/5 bg-black/95 overflow-hidden"
             >
               <div className="px-4 py-6 space-y-3">
+                {user && (
+                  <div className="p-3.5 mb-3 rounded-2xl bg-white/5 border border-white/10 flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-xl overflow-hidden bg-gradient-to-br from-emerald-600 to-teal-800 flex items-center justify-center text-white font-black text-sm shrink-0 border border-white/10">
+                      {user.photoURL || userData?.avatarUrl ? (
+                        <img 
+                          src={user.photoURL || userData?.avatarUrl} 
+                          alt={user.displayName || userData?.username || 'User'} 
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span>{(user.displayName?.[0] || userData?.username?.[0] || 'U').toUpperCase()}</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-bold text-sm truncate">{user.displayName || userData?.username || 'User'}</p>
+                      <p className="text-xs text-gray-400 truncate">{user.email}</p>
+                    </div>
+                    <Link
+                      to="/profile"
+                      onClick={() => setIsMenuOpen(false)}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-400 text-xs font-bold hover:bg-emerald-500/30 transition-colors shrink-0"
+                    >
+                      Profile
+                    </Link>
+                  </div>
+                )}
+
                 <Link
                   to="/"
                   onClick={() => setIsMenuOpen(false)}

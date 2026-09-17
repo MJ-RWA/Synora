@@ -9,8 +9,12 @@ export interface AuthContextType {
   isAdmin: boolean;
   isSuperAdmin: boolean;
   loginWithGoogle: () => Promise<FirebaseUser | undefined>;
+  loginWithFacebook: () => Promise<FirebaseUser | undefined>;
+  loginWithInstagram: () => Promise<FirebaseUser | undefined>;
   loginWithEmail: (email: string, pass: string) => Promise<FirebaseUser>;
   registerWithEmail: (email: string, pass: string, username: string) => Promise<FirebaseUser>;
+  updateUsername: (newUsername: string) => Promise<string>;
+  updateUserAvatar: (newAvatarUrl: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 

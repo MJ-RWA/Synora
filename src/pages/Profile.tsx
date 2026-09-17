@@ -15,19 +15,32 @@ import {
   Film, 
   Flame, 
   Moon, 
-  Video
+  Video,
+  Facebook,
+  Instagram,
+  Chrome,
+  Loader2
 } from 'lucide-react';
 import { SYNORA_ACHIEVEMENTS } from '../config/achievements';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
 export const Profile = () => {
-  const { user, userData, logout, isAdmin } = useAuth();
+  const { user, userData, logout, isAdmin, updateUsername } = useAuth();
   const [isEditingBio, setIsEditingBio] = useState(false);
   const [bioText, setBioText] = useState(userData?.bio || '');
   const [customStatusText, setCustomStatusText] = useState(userData?.customStatus || '');
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Username edit state
+  const [isEditingUsername, setIsEditingUsername] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [isSavingUsername, setIsSavingUsername] = useState(false);
+  const [usernameError, setUsernameError] = useState('');
+
+  // Avatar error fallback state
+  const [imageError, setImageError] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -51,6 +64,32 @@ export const Profile = () => {
       </div>
     );
   }
+
+  const handleSaveUsername = async () => {
+    const trimmed = usernameInput.trim();
+    if (!trimmed || isSavingUsername) return;
+    if (trimmed.length < 2) {
+      setUsernameError('Username must be at least 2 characters.');
+      return;
+    }
+    if (trimmed.length > 30) {
+      setUsernameError('Username cannot exceed 30 characters.');
+      return;
+    }
+
+    setIsSavingUsername(true);
+    setUsernameError('');
+    try {
+      await updateUsername(trimmed);
+      setIsEditingUsername(false);
+      showToast('Username updated successfully!');
+    } catch (err: unknown) {
+      const error = err as Error;
+      setUsernameError(error.message || 'Failed to update username.');
+    } finally {
+      setIsSavingUsername(false);
+    }
+  };
 
   const handleSaveProfile = async () => {
     if (!user.uid || isSaving) return;
@@ -96,6 +135,10 @@ export const Profile = () => {
     }
   };
 
+  const photoUrl = !imageError ? (user.photoURL || userData?.avatarUrl) : null;
+  const displayName = user.displayName || userData?.username || 'Synora Member';
+  const initial = (displayName[0] || user.email?.[0] || 'U').toUpperCase();
+
   return (
     <div className="max-w-4xl mx-auto py-10 px-4 space-y-8">
       {/* Toast */}
@@ -109,10 +152,20 @@ export const Profile = () => {
       <div className="bg-[#111111] border border-white/10 rounded-[32px] overflow-hidden shadow-2xl">
         <div className="relative bg-gradient-to-r from-emerald-950 via-slate-900 to-[#121212] p-8 border-b border-white/5">
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
-            {/* Avatar with Presence Indicator */}
-            <div className="relative">
-              <div className="w-24 h-24 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-white text-4xl font-black shadow-2xl border-2 border-white/20">
-                {user.displayName?.[0]?.toUpperCase() || userData?.username?.[0]?.toUpperCase() || 'U'}
+            {/* Avatar with Presence Indicator - Displays Facebook/Instagram/Google profile photo */}
+            <div className="relative shrink-0">
+              <div className="w-24 h-24 rounded-2xl overflow-hidden bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-white text-4xl font-black shadow-2xl border-2 border-white/20">
+                {photoUrl ? (
+                  <img 
+                    src={photoUrl} 
+                    alt={displayName}
+                    referrerPolicy="no-referrer"
+                    onError={() => setImageError(true)}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span>{initial}</span>
+                )}
               </div>
               <span 
                 className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-[#111111]" 
@@ -121,20 +174,111 @@ export const Profile = () => {
             </div>
 
             {/* Profile Meta */}
-            <div className="flex-1 text-center sm:text-left space-y-2">
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                  {user.displayName || userData?.username || 'Synora Member'}
-                </h1>
-                {isAdmin ? (
-                  <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase tracking-wider">
-                    Admin
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider">
-                    Member
-                  </span>
-                )}
+            <div className="flex-1 text-center sm:text-left space-y-2.5 min-w-0">
+              {/* Editable Username Row */}
+              {!isEditingUsername ? (
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2.5">
+                  <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                    {displayName}
+                  </h1>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsernameInput(displayName);
+                      setUsernameError('');
+                      setIsEditingUsername(true);
+                    }}
+                    className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-emerald-400 transition-all cursor-pointer"
+                    title="Edit Username"
+                    aria-label="Edit Username"
+                  >
+                    <Edit3 size={15} />
+                  </button>
+                  {isAdmin ? (
+                    <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase tracking-wider">
+                      Admin
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider">
+                      Member
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 max-w-md mx-auto sm:mx-0">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                    Edit Your Username
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="text"
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      placeholder="Enter new username"
+                      maxLength={30}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveUsername();
+                        if (e.key === 'Escape') setIsEditingUsername(false);
+                      }}
+                      className="flex-1 bg-black/80 border border-emerald-500/50 rounded-xl px-3.5 py-2 text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    <button 
+                      type="button"
+                      onClick={handleSaveUsername}
+                      disabled={isSavingUsername || !usernameInput.trim()}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow shrink-0"
+                    >
+                      {isSavingUsername ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                      Save
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setIsEditingUsername(false)}
+                      className="px-3 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-xl text-xs font-bold transition-all shrink-0"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {usernameError && (
+                    <p className="text-xs text-red-400 font-medium">{usernameError}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Connected Auth Providers Badges */}
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-1.5">
+                {user.providerData?.map((p) => {
+                  if (p.providerId === 'facebook.com') {
+                    return (
+                      <span key={p.providerId} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold">
+                        <Facebook size={12} className="fill-current" /> Facebook Account
+                      </span>
+                    );
+                  }
+                  if (p.providerId === 'instagram.com') {
+                    return (
+                      <span key={p.providerId} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-pink-500/10 border border-pink-500/20 text-pink-400 text-xs font-semibold">
+                        <Instagram size={12} /> Instagram Account
+                      </span>
+                    );
+                  }
+                  if (p.providerId === 'google.com') {
+                    return (
+                      <span key={p.providerId} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+                        <Chrome size={12} /> Google Account
+                      </span>
+                    );
+                  }
+                  if (p.providerId === 'password') {
+                    return (
+                      <span key={p.providerId} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-gray-300 text-xs font-semibold">
+                        <Mail size={12} /> Email & Password
+                      </span>
+                    );
+                  }
+                  return null;
+                })}
               </div>
 
               {/* Status / Bio */}

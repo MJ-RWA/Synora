@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { Mail, Lock, Chrome, ArrowRight, User as UserIcon, AlertCircle, Loader2 } from 'lucide-react';
+import { Mail, Lock, Chrome, Facebook, Instagram, ArrowRight, User as UserIcon, AlertCircle, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export const Login = () => {
@@ -11,8 +11,9 @@ export const Login = () => {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
   
-  const { loginWithGoogle, loginWithEmail, registerWithEmail } = useAuth();
+  const { loginWithGoogle, loginWithFacebook, loginWithInstagram, loginWithEmail, registerWithEmail } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = searchParams.get('redirect') || '/';
@@ -42,9 +43,10 @@ export const Login = () => {
   const handleGoogleLogin = async () => {
     setError('');
     setLoading(true);
+    setActiveProvider('google');
     try {
-      await loginWithGoogle();
-      navigate(redirect);
+      const u = await loginWithGoogle();
+      if (u) navigate(redirect);
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
       if (error.code !== 'auth/cancelled-popup-request') {
@@ -52,6 +54,43 @@ export const Login = () => {
       }
     } finally {
       setLoading(false);
+      setActiveProvider(null);
+    }
+  };
+
+  const handleFacebookLogin = async () => {
+    setError('');
+    setLoading(true);
+    setActiveProvider('facebook');
+    try {
+      const u = await loginWithFacebook();
+      if (u) navigate(redirect);
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      if (error.code !== 'auth/cancelled-popup-request' && error.code !== 'auth/popup-closed-by-user') {
+        setError(error.message || 'Facebook login failed');
+      }
+    } finally {
+      setLoading(false);
+      setActiveProvider(null);
+    }
+  };
+
+  const handleInstagramLogin = async () => {
+    setError('');
+    setLoading(true);
+    setActiveProvider('instagram');
+    try {
+      const u = await loginWithInstagram();
+      if (u) navigate(redirect);
+    } catch (err: unknown) {
+      const error = err as { code?: string; message?: string };
+      if (error.code !== 'auth/cancelled-popup-request' && error.code !== 'auth/popup-closed-by-user') {
+        setError(error.message || 'Instagram login failed');
+      }
+    } finally {
+      setLoading(false);
+      setActiveProvider(null);
     }
   };
 
@@ -149,20 +188,57 @@ export const Login = () => {
               </div>
             </div>
 
-            <button 
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={loading}
-              className="w-full bg-white text-black font-black py-4 rounded-2xl hover:bg-gray-200 disabled:opacity-50 transition-all flex items-center justify-center gap-3 shadow-xl"
-            >
-              <Chrome size={20} />
-              Google
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <button 
+                type="button"
+                id="login-google-btn"
+                onClick={handleGoogleLogin}
+                disabled={loading}
+                className="w-full bg-white text-black font-bold py-3.5 px-3 rounded-2xl hover:bg-gray-100 disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg text-xs"
+              >
+                {loading && activeProvider === 'google' ? (
+                  <Loader2 size={16} className="animate-spin text-black" />
+                ) : (
+                  <Chrome size={16} className="text-black shrink-0" />
+                )}
+                <span>Google</span>
+              </button>
+
+              <button 
+                type="button"
+                id="login-facebook-btn"
+                onClick={handleFacebookLogin}
+                disabled={loading}
+                className="w-full bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold py-3.5 px-3 rounded-2xl disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-950/30 text-xs"
+              >
+                {loading && activeProvider === 'facebook' ? (
+                  <Loader2 size={16} className="animate-spin text-white" />
+                ) : (
+                  <Facebook size={16} className="text-white shrink-0 fill-current" />
+                )}
+                <span>Facebook</span>
+              </button>
+
+              <button 
+                type="button"
+                id="login-instagram-btn"
+                onClick={handleInstagramLogin}
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-[#833ab4] via-[#fd1d1d] to-[#fcb045] hover:opacity-95 text-white font-bold py-3.5 px-3 rounded-2xl disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-lg shadow-pink-950/30 text-xs"
+              >
+                {loading && activeProvider === 'instagram' ? (
+                  <Loader2 size={16} className="animate-spin text-white" />
+                ) : (
+                  <Instagram size={16} className="text-white shrink-0" />
+                )}
+                <span>Instagram</span>
+              </button>
+            </div>
 
             {isInIframe && (
               <div className="mt-4 p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-2xl text-center">
                 <p className="text-blue-300 text-xs font-semibold mb-2">
-                  Running inside preview? Open in a full tab for Google popup sign-in, or use Email & Password.
+                  Running inside preview? Open in a full tab for popup social login, or use Email & Password.
                 </p>
                 <a 
                   href={window.location.href} 
