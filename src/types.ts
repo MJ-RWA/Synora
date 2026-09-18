@@ -70,6 +70,7 @@ export interface WatchRoom {
   isLiveParty?: boolean;
   isLiveStreaming?: boolean;
   netflixPlayback?: NetflixRoomPlayback | null;
+  videoEnded?: boolean;
 }
 
 export interface WatchRoomMessage {
@@ -77,6 +78,8 @@ export interface WatchRoomMessage {
   text: string;
   username: string;
   timestamp: string;
+  userId?: string | null;
+  isHost?: boolean;
 }
 
 export interface WatchRoomUser {

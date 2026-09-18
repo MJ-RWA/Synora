@@ -8,11 +8,12 @@ interface YouTubeSyncPlayerProps {
   roomPlaying?: boolean;
   roomCurrentTime?: number;
   roomUpdatedAt?: number;
+  videoEnded?: boolean;
   playing?: boolean;
   currentTime?: number;
   updatedAt?: number;
-  onPlaybackChange?: (playing: boolean, time: number) => void;
-  onHostPlaybackChange?: (playing: boolean, time: number) => void;
+  onPlaybackChange?: (playing: boolean, time: number, videoEnded?: boolean) => void;
+  onHostPlaybackChange?: (playing: boolean, time: number, videoEnded?: boolean) => void;
   onSyncReady?: (syncFn: () => void) => void;
   isRemoteSyncRef?: React.MutableRefObject<boolean>;
 }
@@ -66,6 +67,7 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
   roomPlaying,
   roomCurrentTime,
   roomUpdatedAt,
+  videoEnded = false,
   playing,
   currentTime,
   updatedAt,
@@ -95,7 +97,7 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
 
   const effectivePlaying = isHost 
     ? Boolean(roomPlaying ?? playing) 
-    : (isHostOnline !== false ? Boolean(roomPlaying ?? playing) : false);
+    : (isHostOnline !== false && !videoEnded ? Boolean(roomPlaying ?? playing) : false);
   const effectiveCurrentTime = roomCurrentTime ?? currentTime ?? 0;
   const effectiveUpdatedAt = roomUpdatedAt ?? updatedAt ?? 0;
 
@@ -113,10 +115,10 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
     };
   }, [effectivePlaying, effectiveCurrentTime, effectiveUpdatedAt]);
 
-  // Pause participant YouTube player immediately if host is offline
+  // Pause participant YouTube player immediately if host is offline or video ended
   useEffect(() => {
-    if (isHost || isHostOnline !== false) return;
-    if (playerRef.current) {
+    if (isHost && !videoEnded) return;
+    if ((isHostOnline === false || videoEnded) && playerRef.current) {
       try {
         if (typeof playerRef.current.pauseVideo === 'function') {
           playerRef.current.pauseVideo();
@@ -125,14 +127,14 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
         // ignore
       }
     }
-  }, [isHost, isHostOnline]);
+  }, [isHost, isHostOnline, videoEnded]);
 
-  const handlePlaybackChange = useCallback((isPlayingState: boolean, time: number) => {
+  const handlePlaybackChange = useCallback((isPlayingState: boolean, time: number, ended?: boolean) => {
     setIsPlaying(isPlayingState);
     if (typeof onPlaybackChangeRef.current === 'function') {
-      onPlaybackChangeRef.current(isPlayingState, time);
+      onPlaybackChangeRef.current(isPlayingState, time, ended);
     } else if (typeof onHostPlaybackChangeRef.current === 'function') {
-      onHostPlaybackChangeRef.current(isPlayingState, time);
+      onHostPlaybackChangeRef.current(isPlayingState, time, ended);
     }
   }, []);
 
@@ -187,7 +189,7 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
 
   const togglePlay = () => {
     if (!playerRef.current || !isPlayerReady) return;
-    if (!isHostRef.current && isHostOnline === false) return;
+    if (!isHostRef.current && (isHostOnline === false || videoEnded)) return;
     const player = playerRef.current;
     if (typeof player.getCurrentTime !== 'function') return;
     const curTime = (() => {
@@ -361,7 +363,13 @@ export const YouTubeSyncPlayer: React.FC<YouTubeSyncPlayerProps> = ({
                 setIsPlaying(false);
                 if (isHostRef.current) {
                   const curPos = typeof event.target.getCurrentTime === 'function' ? event.target.getCurrentTime() : 0;
-                  handlePlaybackChange(false, curPos);
+                  handlePlaybackChange(false, curPos, false);
+                }
+              } else if (state === window.YT.PlayerState.ENDED) {
+                setIsPlaying(false);
+                if (isHostRef.current) {
+                  const curPos = typeof event.target.getCurrentTime === 'function' ? event.target.getCurrentTime() : 0;
+                  handlePlaybackChange(false, curPos, true);
                 }
               }
             },

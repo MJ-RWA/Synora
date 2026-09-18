@@ -332,7 +332,9 @@ service cloud.firestore {
           (
             (
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playing', 'currentTime', 'updatedAt']) ||
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playing', 'currentTime', 'updatedAt', 'netflixPlayback'])
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playing', 'currentTime', 'updatedAt', 'videoEnded']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playing', 'currentTime', 'updatedAt', 'netflixPlayback']) ||
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playing', 'currentTime', 'updatedAt', 'videoEnded', 'netflixPlayback'])
             ) &&
             isAuthenticated() && (
               request.auth.uid == resource.data.hostId || 

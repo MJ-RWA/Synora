@@ -7,7 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useExtensionBridge } from '../hooks/useExtensionBridge';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
 import Hls from 'hls.js';
-import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye, Camera, Link as LinkIcon } from 'lucide-react';
+import { Users, Send, Share2, ArrowLeft, Check, User, MessageSquare, Film, Monitor, UserPlus, X, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, Maximize, Minimize, AlertTriangle, LogOut, Trash2, Radio, MonitorOff, Eye, Camera, Link as LinkIcon, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VoiceChat } from '../components/VoiceChat';
 import { ScreenShare } from '../components/ScreenShare';
@@ -19,6 +19,7 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { recordWatchTime } from '../services/socialService';
 import { isUserLive, sendHeartbeat, markUserOffline, formatLastSeen, HEARTBEAT_INTERVAL_MS } from '../services/presenceService';
 import { purgeRoomFromLocalState, deleteRoomPermanently } from '../services/roomCleanup';
+import { getChatMessageTheme } from '../utils/chatThemes';
 
 // Helper to extract YouTube video ID if URL is YouTube
 const getYouTubeVideoId = (url?: string): string | null => {
@@ -712,30 +713,62 @@ export const WatchParty = () => {
   }, [room?.videoUrl]);
 
   // Authoritative Playback Updater for Host
-  const updateRoomPlayback = useCallback(async (playing: boolean, time: number) => {
+  const updateRoomPlayback = useCallback(async (playing: boolean, time: number, videoEnded?: boolean) => {
     const currentRoom = roomRef.current;
     const currentUser = userRef.current;
     if (!cleanRoomId || !currentUser || !currentRoom) return;
     if (currentRoom.hostId !== currentUser.uid || isRemoteSyncRef.current) return;
 
-    // Deduplicate identical updates sent within 800ms
+    // Deduplicate identical updates sent within 800ms unless videoEnded status is changing
     const now = Date.now();
     const last = lastPublishedPlayback.current;
-    if (last.playing === playing && Math.abs(last.time - time) < 0.5 && now - last.timestamp < 800) {
+    if (videoEnded === undefined && last.playing === playing && Math.abs(last.time - time) < 0.5 && now - last.timestamp < 800) {
       return;
     }
     lastPublishedPlayback.current = { playing, time, timestamp: now };
 
     try {
-      await updateDoc(doc(db, 'watchRooms', cleanRoomId), {
+      const payload: Record<string, unknown> = {
         playing,
         currentTime: time,
         updatedAt: now
-      });
+      };
+      if (typeof videoEnded === 'boolean') {
+        payload.videoEnded = videoEnded;
+      } else if (playing) {
+        payload.videoEnded = false;
+      }
+      await updateDoc(doc(db, 'watchRooms', cleanRoomId), payload);
     } catch (error) {
       console.warn("Failed to update room playback:", error);
     }
   }, [cleanRoomId]);
+
+  const handleHostVideoEnded = useCallback(() => {
+    if (!isHost || isRemoteSyncRef.current) return;
+    setIsVideoPlaying(false);
+    const video = videoRef.current;
+    const dur = video?.duration || video?.currentTime || 0;
+    updateRoomPlayback(false, dur, true);
+    showToast("The video has ended.");
+  }, [isHost, updateRoomPlayback, showToast]);
+
+  const handleHostReplayVideo = useCallback(() => {
+    if (!isHost) return;
+    const video = videoRef.current;
+    if (video) {
+      video.currentTime = 0;
+      setVideoCurrentTime(0);
+      video.play().then(() => {
+        setIsVideoPlaying(true);
+        updateRoomPlayback(true, 0, false);
+      }).catch(() => {
+        updateRoomPlayback(true, 0, false);
+      });
+    } else {
+      updateRoomPlayback(true, 0, false);
+    }
+  }, [isHost, updateRoomPlayback]);
 
   const youtubeVideoId = getYouTubeVideoId(room?.videoUrl);
   const roomPlaying = room?.playing;
@@ -772,6 +805,18 @@ export const WatchParty = () => {
       return;
     }
 
+    // RULE: When video has ended from host's side, participants cannot restart!
+    if (!isHost && (room?.videoEnded || (video.duration > 0 && video.currentTime >= video.duration - 0.5))) {
+      showToast("The video has ended. Waiting for the host to restart or select a new video.");
+      return;
+    }
+
+    // RULE: Participants in synchronized watch party cannot unilaterally start playing
+    if (!isHost && !room?.playing && video.paused) {
+      showToast("Playback is synchronized with the host.");
+      return;
+    }
+
     if (!video.src && !video.currentSrc) {
       console.warn("Playback postponed: video source is still loading");
       return;
@@ -785,7 +830,7 @@ export const WatchParty = () => {
             setIsVideoPlaying(true);
             setIsAutoplayBlocked(false);
             if (isHost) {
-              updateRoomPlayback(true, video.currentTime);
+              updateRoomPlayback(true, video.currentTime, false);
             }
           })
           .catch((err) => {
@@ -801,7 +846,7 @@ export const WatchParty = () => {
               .then(() => {
                 setIsVideoPlaying(true);
                 if (isHost) {
-                  updateRoomPlayback(true, video.currentTime);
+                  updateRoomPlayback(true, video.currentTime, false);
                 }
               })
               .catch((e2) => {
@@ -815,10 +860,10 @@ export const WatchParty = () => {
       video.pause();
       setIsVideoPlaying(false);
       if (isHost) {
-        updateRoomPlayback(false, video.currentTime);
+        updateRoomPlayback(false, video.currentTime, false);
       }
     }
-  }, [isHost, isHostOnline, updateRoomPlayback, showToast]);
+  }, [isHost, isHostOnline, room?.videoEnded, room?.playing, updateRoomPlayback, showToast]);
 
   const handleUnmuteVideo = useCallback(() => {
     const video = videoRef.current;
@@ -853,12 +898,18 @@ export const WatchParty = () => {
       return;
     }
 
+    // RULE: When video has ended, participants cannot seek or restart
+    if (!isHost && room?.videoEnded) {
+      showToast("The video has ended. Only the host can seek or restart.");
+      return;
+    }
+
     video.currentTime = newTime;
     setVideoCurrentTime(newTime);
     if (isHost) {
-      updateRoomPlayback(!video.paused, newTime);
+      updateRoomPlayback(!video.paused, newTime, false);
     }
-  }, [isHost, isHostOnline, updateRoomPlayback, showToast]);
+  }, [isHost, isHostOnline, room?.videoEnded, updateRoomPlayback, showToast]);
 
   const handleVolumeChange = useCallback((newVolume: number) => {
     const video = videoRef.current;
@@ -952,6 +1003,15 @@ export const WatchParty = () => {
     const video = videoRef.current;
     if (!video || isHost || isScreenSharing || youtubeVideoId || isNetflixParty) return;
 
+    // RULE: When video has ended according to the host, freeze and pause immediately
+    if (room?.videoEnded) {
+      if (!video.paused) {
+        video.pause();
+        setIsVideoPlaying(false);
+      }
+      return;
+    }
+
     // RULE: The host is the playback authority. If the host is offline, playback must remain paused.
     if (!isHostOnline) {
       if (!video.paused) {
@@ -1023,7 +1083,7 @@ export const WatchParty = () => {
         isRemoteSyncRef.current = false;
       }, 1200);
     }
-  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isHostOnline, isScreenSharing, youtubeVideoId, isNetflixParty]);
+  }, [roomPlaying, roomCurrentTime, roomUpdatedAt, isHost, isHostOnline, isScreenSharing, youtubeVideoId, isNetflixParty, room?.videoEnded]);
 
   // Host auto-start playback if room is marked playing
   useEffect(() => {
@@ -1607,6 +1667,8 @@ export const WatchParty = () => {
       await addDoc(collection(db, `watchRooms/${cleanRoomId}/messages`), {
         text: newMessage,
         username,
+        userId: effectiveUserId,
+        isHost,
         timestamp: new Date().toISOString()
       });
       setNewMessage('');
@@ -2500,10 +2562,11 @@ export const WatchParty = () => {
                 videoId={youtubeVideoId}
                 isHost={isHost}
                 isHostOnline={isHostOnline}
-                roomPlaying={isHostOnline ? Boolean(room.playing) : false}
+                roomPlaying={isHostOnline && !room.videoEnded ? Boolean(room.playing) : false}
                 roomCurrentTime={room.currentTime || 0}
                 roomUpdatedAt={room.updatedAt || 0}
-                playing={isHostOnline ? Boolean(room.playing) : false}
+                videoEnded={Boolean(room?.videoEnded)}
+                playing={isHostOnline && !room.videoEnded ? Boolean(room.playing) : false}
                 currentTime={room.currentTime || 0}
                 updatedAt={room.updatedAt || 0}
                 onPlaybackChange={updateRoomPlayback}
@@ -2542,9 +2605,18 @@ export const WatchParty = () => {
                   playsInline
                   preload="auto"
                   onClick={toggleVideoPlay}
+                  onEnded={() => {
+                    setIsVideoPlaying(false);
+                    if (isHost) {
+                      handleHostVideoEnded();
+                    }
+                  }}
                   onTimeUpdate={() => {
                     if (videoRef.current) {
                       setVideoCurrentTime(videoRef.current.currentTime);
+                      if (isHost && !room?.videoEnded && videoRef.current.duration > 0 && videoRef.current.currentTime >= videoRef.current.duration - 0.4) {
+                        handleHostVideoEnded();
+                      }
                     }
                   }}
                   onDurationChange={() => {
@@ -2556,18 +2628,18 @@ export const WatchParty = () => {
                   onPlay={() => {
                     setIsVideoPlaying(true);
                     if (isHost && !isRemoteSyncRef.current && videoRef.current && !videoRef.current.seeking) {
-                      updateRoomPlayback(true, videoRef.current.currentTime);
+                      updateRoomPlayback(true, videoRef.current.currentTime, false);
                     }
                   }}
                   onPause={() => {
                     setIsVideoPlaying(false);
                     if (isHost && !isRemoteSyncRef.current && videoRef.current && !videoRef.current.seeking) {
-                      updateRoomPlayback(false, videoRef.current.currentTime);
+                      updateRoomPlayback(false, videoRef.current.currentTime, false);
                     }
                   }}
                   onSeeked={() => {
                     if (isHost && !isRemoteSyncRef.current && videoRef.current) {
-                      updateRoomPlayback(!videoRef.current.paused, videoRef.current.currentTime);
+                      updateRoomPlayback(!videoRef.current.paused, videoRef.current.currentTime, false);
                     }
                   }}
                   onError={() => {
@@ -2595,14 +2667,65 @@ export const WatchParty = () => {
                   )}
                 </video>
 
-                {/* Big Center Play/Pause Button when paused */}
-                {!isVideoPlaying && !videoLoadError && isHostOnline && (
+                {/* Big Center Play/Pause Button when paused and not ended */}
+                {!isVideoPlaying && !videoLoadError && isHostOnline && !room?.videoEnded && (
                   <div 
                     onClick={toggleVideoPlay}
                     className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px] transition-all cursor-pointer z-10"
                   >
                     <div className="w-20 h-20 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center shadow-2xl shadow-emerald-500/50 hover:scale-110 active:scale-95 transition-all">
                       <Play size={36} className="ml-1 fill-white" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Video Finished Overlay (Enforces room-wide end: participants cannot restart) */}
+                {Boolean(room?.videoEnded) && (
+                  <div className="absolute inset-0 z-20 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center space-y-4">
+                    <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/10">
+                      <Film size={32} />
+                    </div>
+                    <div className="max-w-md">
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-gray-300 text-[11px] font-bold uppercase tracking-wider mb-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        Video Finished
+                      </div>
+                      <h3 className="text-white font-black text-xl sm:text-2xl">
+                        {room.title || "Watch Party"} has ended
+                      </h3>
+                      <p className="text-gray-300 text-xs sm:text-sm mt-1.5 leading-relaxed">
+                        {isHost
+                          ? "The video playback has finished. You can replay the video from the beginning or choose another video."
+                          : `The host (${room.hostName || "Host"}) has finished the video. Waiting for the host to restart or choose a new video.`}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                      {isHost ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleHostReplayVideo}
+                            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 shadow-xl shadow-emerald-600/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                          >
+                            <RotateCcw size={16} /> Replay from Beginning
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditStreamInput(room.videoUrl || '');
+                              setIsEditStreamModalOpen(true);
+                            }}
+                            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs sm:text-sm font-bold border border-white/10 transition-all cursor-pointer flex items-center gap-2"
+                          >
+                            <LinkIcon size={16} /> Change Video
+                          </button>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 border border-white/15 text-xs text-gray-200 font-medium">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>Connected — waiting for host to restart</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2685,10 +2808,10 @@ export const WatchParty = () => {
                       max={videoDuration || 100}
                       step={0.1}
                       value={videoCurrentTime}
-                      disabled={!isHost && !isHostOnline}
+                      disabled={(!isHost && !isHostOnline) || (!isHost && Boolean(room?.videoEnded))}
                       onChange={(e) => handleSeekVideo(parseFloat(e.target.value))}
                       className={`w-full h-1.5 bg-white/20 rounded-lg appearance-none transition-all ${
-                        !isHost && !isHostOnline
+                        (!isHost && !isHostOnline) || (!isHost && Boolean(room?.videoEnded))
                           ? 'opacity-40 cursor-not-allowed'
                           : 'hover:h-2 cursor-pointer accent-emerald-500'
                       }`}
@@ -2701,14 +2824,16 @@ export const WatchParty = () => {
                       <button
                         type="button"
                         onClick={toggleVideoPlay}
-                        disabled={!isHost && !isHostOnline}
+                        disabled={(!isHost && !isHostOnline) || (!isHost && Boolean(room?.videoEnded))}
                         className={`p-1.5 rounded-lg text-white transition-colors ${
-                          !isHost && !isHostOnline
+                          (!isHost && !isHostOnline) || (!isHost && Boolean(room?.videoEnded))
                             ? 'opacity-40 cursor-not-allowed'
                             : 'hover:bg-white/10'
                         }`}
                         title={
-                          !isHost && !isHostOnline
+                          !isHost && room?.videoEnded
+                            ? "The video has ended. Waiting for host to restart."
+                            : !isHost && !isHostOnline
                             ? "Playback is paused until the host returns."
                             : isVideoPlaying ? "Pause" : "Play"
                         }
@@ -3022,7 +3147,12 @@ export const WatchParty = () => {
                         : msg.username === prevMsg.username
                     )
                   );
-                  const isHost = msg.username === room.hostName;
+                  const isSenderHost = Boolean(
+                    msg.isHost ||
+                    (room?.hostId && msg.userId && msg.userId === room.hostId) ||
+                    msg.username === room?.hostName
+                  );
+                  const theme = getChatMessageTheme(msg.userId || msg.username, isSenderHost);
 
                   return (
                     <div 
@@ -3031,15 +3161,20 @@ export const WatchParty = () => {
                     >
                       {!isSameSender && (
                         <div className="flex items-baseline gap-2 mb-1">
-                          <span className={`text-[10px] sm:text-[11px] font-black ${isHost ? 'text-emerald-500' : 'text-gray-400'}`}>
+                          <span className={`text-[10px] sm:text-[11px] font-black ${theme.nameColor}`}>
                             {msg.username}
                           </span>
-                          <span className="text-[8px] sm:text-[9px] text-gray-600">
+                          {isSenderHost && (
+                            <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${theme.badgeBg} ${theme.badgeText} border ${theme.badgeBorder}`}>
+                              Host
+                            </span>
+                          )}
+                          <span className="text-[8px] sm:text-[9px] text-gray-500">
                             {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
                       )}
-                      <p className={`text-[11px] sm:text-xs text-gray-200 bg-white/5 p-2 sm:p-2.5 rounded-xl border border-white/5 leading-relaxed break-words ${
+                      <p className={`text-[11px] sm:text-xs p-2.5 sm:p-3 rounded-xl border leading-relaxed break-words shadow-sm transition-colors ${theme.bubbleBg} ${theme.bubbleBorder} ${theme.bubbleText} ${theme.accentBorder} ${
                         isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'
                       }`}>
                         {msg.text}

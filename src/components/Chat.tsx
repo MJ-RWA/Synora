@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { Send, X, MessageCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { handleFirestoreError, OperationType } from '../services/firestoreError';
+import { getChatMessageTheme } from '../utils/chatThemes';
 
 interface ChatProps {
   matchId: string;
@@ -97,6 +98,7 @@ export const Chat: React.FC<ChatProps> = ({ matchId, onClose }) => {
             )
           );
           const isMe = msg.userId === user?.uid;
+          const theme = getChatMessageTheme(msg.userId || msg.username, false);
 
           return (
             <div 
@@ -106,19 +108,21 @@ export const Chat: React.FC<ChatProps> = ({ matchId, onClose }) => {
               }`}
             >
               {!isSameSender && (
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{msg.username}</span>
+                <div className="flex items-center gap-2 mb-1 px-1">
+                  <span className={`text-[10px] font-black uppercase tracking-wider ${isMe ? 'text-emerald-400' : theme.nameColor}`}>
+                    {msg.username}
+                  </span>
                   {msg.createdAt && (
-                    <span className="text-[8px] text-gray-600">
+                    <span className="text-[8px] text-gray-500">
                       {format(msg.createdAt.toDate(), 'HH:mm')}
                     </span>
                   )}
                 </div>
               )}
-              <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
+              <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed break-words shadow-sm transition-colors ${
                 isMe 
                   ? `bg-emerald-600 text-white ${isSameSender ? 'rounded-tr-md' : 'rounded-tr-none'}` 
-                  : `bg-white/5 text-gray-200 ${isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'} border border-white/10`
+                  : `${theme.bubbleBg} ${theme.bubbleBorder} ${theme.bubbleText} ${theme.accentBorder} border ${isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'}`
               }`}>
                 {msg.text}
               </div>

@@ -39,6 +39,7 @@ import {
   Pause
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getChatMessageTheme } from '../utils/chatThemes';
 
 export const LiveParty: React.FC = () => {
   const { roomId } = useParams();
@@ -456,6 +457,7 @@ export const LiveParty: React.FC = () => {
         text,
         username: senderName,
         userId: effectiveUserId,
+        isHost,
         timestamp: new Date().toISOString()
       });
     } catch (err) {
@@ -1131,7 +1133,12 @@ export const LiveParty: React.FC = () => {
                           : msg.username === prevMsg.username
                       )
                     );
-                    const isSenderHost = msg.username === room.hostName;
+                    const isSenderHost = Boolean(
+                      msg.isHost ||
+                      (room?.hostId && msg.userId && msg.userId === room.hostId) ||
+                      msg.username === room.hostName
+                    );
+                    const theme = getChatMessageTheme(msg.userId || msg.username, isSenderHost);
 
                     return (
                       <div
@@ -1140,11 +1147,11 @@ export const LiveParty: React.FC = () => {
                       >
                         {!isSameSender && (
                           <div className="flex items-baseline gap-2 mb-1 px-1">
-                            <span className={`text-[11px] font-black ${isSenderHost ? 'text-emerald-400' : 'text-gray-300'}`}>
+                            <span className={`text-[11px] font-black ${theme.nameColor}`}>
                               {msg.username}
                             </span>
                             {isSenderHost && (
-                              <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-[8px] font-black uppercase">
+                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${theme.badgeBg} ${theme.badgeText} border ${theme.badgeBorder}`}>
                                 Host
                               </span>
                             )}
@@ -1154,7 +1161,7 @@ export const LiveParty: React.FC = () => {
                           </div>
                         )}
                         <div
-                          className={`text-xs text-gray-100 bg-white/5 p-2.5 rounded-2xl border border-white/5 leading-relaxed break-words shadow-sm ${
+                          className={`text-xs p-2.5 rounded-2xl border leading-relaxed break-words shadow-sm transition-colors ${theme.bubbleBg} ${theme.bubbleBorder} ${theme.bubbleText} ${theme.accentBorder} ${
                             isSameSender ? 'rounded-tl-md' : 'rounded-tl-none'
                           }`}
                         >
