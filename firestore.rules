@@ -282,7 +282,14 @@ service cloud.firestore {
     }
 
     match /watchRooms/{roomId} {
-      allow read: if true;
+      // Public rooms remain open; private rooms require host/owner/allowedUsers.
+      // Mirrors canAccessWatchRoom() but reads resource.data directly (no extra get()).
+      allow read: if (!('isPrivate' in resource.data) || resource.data.isPrivate != true) ||
+        (isAuthenticated() && (
+          (('hostId' in resource.data) && request.auth.uid == resource.data.hostId) ||
+          (('ownerId' in resource.data) && request.auth.uid == resource.data.ownerId) ||
+          (('allowedUsers' in resource.data) && resource.data.allowedUsers is list && request.auth.uid in resource.data.allowedUsers)
+        ));
       allow create: if isAuthenticated() && isValidWatchRoom(request.resource.data);
       allow update: if 
         (
