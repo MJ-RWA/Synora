@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import {
   doc,
+  setDoc,
   onSnapshot,
   updateDoc,
   collection,
@@ -21,6 +22,7 @@ import {
   MessageSquare,
   Share2,
   ArrowLeft,
+  ArrowDown,
   Check,
   X,
   Send,
@@ -90,14 +92,18 @@ export const LiveParty: React.FC = () => {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [cameraFacingMode, setCameraFacingMode] = useState<'user' | 'environment'>('user');
   const [isCameraAudioMuted, setIsCameraAudioMuted] = useState(true);
+  const [isAutoplayBlocked, setIsAutoplayBlocked] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileScrolled, setIsMobileScrolled] = useState(false);
+  const [isScrolledUpInChat, setIsScrolledUpInChat] = useState(false);
 
   // Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const lastReactionSentRef = useRef<number>(0);
+  const [joinedAt] = useState(() => new Date().toISOString());
 
   // Host detection: Strict rule matching WatchParty
   const isHost = useMemo(() => {
@@ -207,16 +213,37 @@ export const LiveParty: React.FC = () => {
   const isHostOnline = useMemo(() => {
     if (isHost) return true;
     if (!room) return false;
+    // If room is explicitly marked inactive or stream ended, host is offline
+    if (room.isActive === false || room.isLiveStreaming === false) return false;
     // Before initial users snapshot has finished loading, avoid flashing offline immediately
     if (!hasInitialUsersLoaded) return true;
-    if (!hostParticipant) return false;
-    return isUserLive(hostParticipant, presenceTick);
+    if (hostParticipant) {
+      return isUserLive(hostParticipant, presenceTick);
+    }
+    // If hostParticipant is not yet indexed in roomUsers but room is actively streaming, assume online
+    return true;
   }, [isHost, room, hasInitialUsersLoaded, hostParticipant, presenceTick]);
 
-  // Active live participants
+  // Active live participants: ensure roomUsers filtered by presence, plus current user if joined
   const liveParticipants = useMemo(() => {
-    return roomUsers.filter(u => isUserLive(u, presenceTick));
-  }, [roomUsers, presenceTick]);
+    const active = roomUsers.filter(u => isUserLive(u, presenceTick));
+    if (hasJoined && effectiveUserId && !active.some(u => u.uid === effectiveUserId || u.id === effectiveUserId)) {
+      return [
+        ...active,
+        {
+          id: effectiveUserId,
+          uid: effectiveUserId,
+          username: username.trim() || (isHost ? 'Host' : 'Guest'),
+          isHost,
+          joinedAt,
+          lastSeen: presenceTick,
+          connectionStatus: 'online',
+          status: 'watching',
+        } as WatchRoomUser,
+      ];
+    }
+    return active;
+  }, [roomUsers, presenceTick, hasJoined, effectiveUserId, username, isHost, joinedAt]);
 
   // Track previous host online state to notify participant and resume on reconnect
   const prevHostOnlineRef = useRef<boolean>(true);
@@ -263,14 +290,29 @@ export const LiveParty: React.FC = () => {
     };
   }, [isHost, hasInitialUsersLoaded, isHostOnline, cameraStream, cleanRoomId, effectiveUserId, room?.cameraHostId, room?.hostId, showToast]);
 
-  // 3. User Presence Heartbeat
+  // 3. User Presence Registration & Heartbeat
   useEffect(() => {
-    if (!cleanRoomId || !hasJoined) return;
+    if (!cleanRoomId || !hasJoined || !effectiveUserId) return;
+
+    // Immediate registration with setDoc merge so participant is recognized immediately
+    const userDocRef = doc(db, `watchRooms/${cleanRoomId}/users`, effectiveUserId);
+    setDoc(userDocRef, {
+      username: username.trim() || (isHost ? 'Host' : 'Guest'),
+      uid: effectiveUserId,
+      isHost,
+      joinedAt: new Date().toISOString(),
+      lastSeen: Date.now(),
+      connectionStatus: 'online',
+      status: 'watching',
+      photoURL: user?.photoURL || null
+    }, { merge: true }).catch(err => {
+      console.warn('Initial presence write note:', err);
+    });
 
     const announce = async () => {
       try {
         await sendHeartbeat(cleanRoomId, effectiveUserId, {
-          username: username.trim() || 'Guest',
+          username: username.trim() || (isHost ? 'Host' : 'Guest'),
           isHost,
           uid: user?.uid || null,
           photoURL: user?.photoURL || null
@@ -318,11 +360,19 @@ export const LiveParty: React.FC = () => {
         msgs.push({ id: docSnap.id, ...docSnap.data() } as WatchRoomMessage);
       });
       setMessages(msgs);
+
+      // Only auto-scroll inside chat container if user is already near bottom;
+      // Never call window scrollIntoView which causes the browser window to jump and disturbs desktop player!
       setTimeout(() => {
-        if (chatBottomRef.current) {
-          chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+        const container = chatContainerRef.current;
+        if (container) {
+          const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+          if (isNearBottom) {
+            container.scrollTop = container.scrollHeight;
+            setIsScrolledUpInChat(false);
+          }
         }
-      }, 60);
+      }, 50);
     });
 
     return () => unsubscribe();
@@ -346,7 +396,7 @@ export const LiveParty: React.FC = () => {
     return () => unsubscribe();
   }, [cleanRoomId]);
 
-  // Attach camera stream to video player
+  // Attach camera stream to video player with autoplay block recovery
   useEffect(() => {
     const video = videoRef.current;
     if (video && cameraStream) {
@@ -355,7 +405,28 @@ export const LiveParty: React.FC = () => {
       }
       video.muted = isHost ? true : isCameraAudioMuted;
       video.playsInline = true;
-      video.play().catch(() => {});
+
+      const attemptPlay = async () => {
+        try {
+          await video.play();
+          setIsAutoplayBlocked(false);
+        } catch (err) {
+          // If browser blocked unmuted autoplay for participant, mute and retry so video displays immediately!
+          if (!isHost && !video.muted) {
+            console.warn('[LiveParty] Autoplay with audio blocked by browser, muting to display video:', err);
+            video.muted = true;
+            setIsCameraAudioMuted(true);
+            setIsAutoplayBlocked(true);
+            try {
+              await video.play();
+            } catch (playErr) {
+              console.warn('[LiveParty] Secondary play attempt error:', playErr);
+            }
+          }
+        }
+      };
+
+      attemptPlay();
 
       const resumePlayback = () => {
         video.play().catch(() => {});
@@ -731,15 +802,15 @@ export const LiveParty: React.FC = () => {
       )}
 
       {/* Main Layout Grid matching WatchParty */}
-      <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+      <main className="max-w-[1800px] mx-auto p-0 sm:p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 items-start">
         {/* Left Column (3 cols on desktop): Video Player Stage & Studio Controls */}
-        <div className="lg:col-span-3 space-y-3 sm:space-y-4">
-          {/* Video Player Stage (Sticky on mobile for continuous viewing while scrolling) */}
+        <div className="lg:col-span-3 space-y-3 sm:space-y-4 lg:self-start lg:sticky lg:top-4">
+          {/* Video Player Stage (Sticky on mobile and fixed/sticky on desktop when chats scroll) */}
           <div
             id="video-player-stage"
             data-video-stage="true"
             ref={playerContainerRef}
-            className="sticky top-0 z-40 w-full aspect-video bg-black shadow-2xl border-b lg:border border-white/10 select-none lg:relative lg:top-auto lg:z-auto lg:aspect-video lg:rounded-2xl lg:overflow-hidden group"
+            className="sticky top-0 lg:top-4 z-30 w-full aspect-video bg-black shadow-2xl border-b lg:border border-white/10 select-none lg:aspect-video lg:rounded-2xl lg:overflow-hidden group"
           >
             {/* Scrolled-to-fixed mobile indicator */}
             {isMobileScrolled && (
@@ -862,6 +933,25 @@ export const LiveParty: React.FC = () => {
                 </div>
               )}
 
+              {/* Autoplay muted by browser recovery banner for participants */}
+              {!isHost && isAutoplayBlocked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (videoRef.current) {
+                      videoRef.current.muted = false;
+                      setIsCameraAudioMuted(false);
+                      setIsAutoplayBlocked(false);
+                      videoRef.current.play().catch(() => {});
+                    }
+                  }}
+                  className="absolute top-3 right-3 sm:top-4 sm:right-4 z-30 bg-amber-500 hover:bg-amber-400 text-black px-3 py-1.5 rounded-full font-bold text-xs shadow-xl flex items-center gap-1.5 cursor-pointer transition-all animate-bounce"
+                >
+                  <VolumeX size={14} />
+                  <span>Tap to unmute broadcast</span>
+                </button>
+              )}
+
               {/* Video Overlay Controls: Audio Unmute & Fullscreen */}
               <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex items-center gap-2 z-30 transition-opacity opacity-90 hover:opacity-100">
                 {!isHost && isHostOnline && (
@@ -872,6 +962,7 @@ export const LiveParty: React.FC = () => {
                         if (videoRef.current) {
                           videoRef.current.muted = false;
                           setIsCameraAudioMuted(false);
+                          setIsAutoplayBlocked(false);
                           videoRef.current.play().catch(() => {});
                         }
                       }}
@@ -968,7 +1059,7 @@ export const LiveParty: React.FC = () => {
         {/* Right Column (1 col on desktop): Live Chat & People Sidebar */}
         <div
           id="liveparty-sidebar"
-          className="mx-3 sm:mx-0 mb-4 sm:mb-6 lg:mb-0 lg:col-span-1 flex flex-col h-[460px] sm:h-[550px] lg:h-[calc(100vh-120px)] bg-[#101010] border border-white/5 rounded-2xl overflow-hidden shadow-2xl"
+          className="mx-3 sm:mx-0 mb-4 sm:mb-6 lg:mb-0 lg:col-span-1 lg:self-start lg:sticky lg:top-4 flex flex-col h-[460px] sm:h-[550px] lg:h-[calc(100vh-100px)] bg-[#101010] border border-white/5 rounded-2xl overflow-hidden shadow-2xl relative"
         >
           {/* Tabs: Chat vs People */}
           <div className="p-2.5 sm:p-3 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
@@ -1014,8 +1105,16 @@ export const LiveParty: React.FC = () => {
 
           {/* TAB 1: Chat Content */}
           {activeSidebarTab === 'chat' ? (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 scrollbar-hide">
+            <div className="flex-1 flex flex-col overflow-hidden relative">
+              <div
+                ref={chatContainerRef}
+                onScroll={(e) => {
+                  const target = e.currentTarget;
+                  const isUp = target.scrollHeight - target.scrollTop - target.clientHeight > 120;
+                  setIsScrolledUpInChat(isUp);
+                }}
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 scrollbar-hide overscroll-contain relative"
+              >
                 {messages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center p-6 text-gray-500">
                     <MessageSquare size={32} className="mb-2 opacity-30 text-emerald-400" />
@@ -1068,6 +1167,26 @@ export const LiveParty: React.FC = () => {
                 <div ref={chatBottomRef} />
               </div>
 
+              {/* Jump to latest message button if user scrolled up */}
+              {isScrolledUpInChat && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (chatContainerRef.current) {
+                      chatContainerRef.current.scrollTo({
+                        top: chatContainerRef.current.scrollHeight,
+                        behavior: 'smooth'
+                      });
+                      setIsScrolledUpInChat(false);
+                    }
+                  }}
+                  className="absolute bottom-16 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 rounded-full bg-emerald-600/95 hover:bg-emerald-500 text-white text-xs font-bold shadow-xl backdrop-blur-md flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <ArrowDown size={13} />
+                  <span>Scroll to latest</span>
+                </button>
+              )}
+
               {/* Chat Input Form */}
               <form onSubmit={handleSendMessage} className="p-2.5 sm:p-3 border-t border-white/5 bg-white/[0.02] flex items-center gap-2">
                 <input
@@ -1090,7 +1209,7 @@ export const LiveParty: React.FC = () => {
             </div>
           ) : (
             /* TAB 2: People Content */
-            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 scrollbar-hide">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 scrollbar-hide overscroll-contain">
               <div className="flex items-center justify-between px-1 mb-2">
                 <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />

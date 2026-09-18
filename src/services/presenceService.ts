@@ -1,4 +1,4 @@
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { WatchRoomUser } from '../types';
 
@@ -65,12 +65,12 @@ export async function sendHeartbeat(
 
   try {
     const userDocRef = doc(db, `watchRooms/${roomId}/users`, userId);
-    await updateDoc(userDocRef, {
+    await setDoc(userDocRef, {
       lastSeen: now,
       connectionStatus: 'online',
       status: 'watching',
       ...extra
-    });
+    }, { merge: true });
   } catch (error) {
     console.debug('Heartbeat update non-fatal:', error);
   }

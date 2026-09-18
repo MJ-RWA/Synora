@@ -152,16 +152,6 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
     const pc = new RTCPeerConnection(getIceServers());
     peerConnections.current[targetUserId] = pc;
 
-    // Viewers declare receive-only transceivers for audio & video to guarantee SDP negotiation
-    if (!isHost) {
-      try {
-        pc.addTransceiver('video', { direction: 'recvonly' });
-        pc.addTransceiver('audio', { direction: 'recvonly' });
-      } catch (transceiverErr) {
-        console.debug('[CameraBroadcast] Transceiver note:', transceiverErr);
-      }
-    }
-
     pc.onicecandidate = (event) => {
       if (event.candidate && cleanRoomId && myId) {
         addDoc(collection(db, `watchRooms/${cleanRoomId}/signals`), {
@@ -202,20 +192,15 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
 
     pc.ontrack = (event) => {
       console.debug(`[CameraBroadcast] Received remote track (${event.track.kind}):`, event.track.id);
-      let stream = remoteStreams.current[targetUserId];
+      // Prefer event.streams[0] if provided by WebRTC, else build the stream
+      let stream = (event.streams && event.streams[0]) ? event.streams[0] : remoteStreams.current[targetUserId];
       if (!stream) {
         stream = new MediaStream();
-        remoteStreams.current[targetUserId] = stream;
       }
-      // Replace any existing track of the same kind to prevent stale frozen frames
-      stream.getTracks().forEach(t => {
-        if (t.kind === event.track.kind && t.id !== event.track.id) {
-          try { stream.removeTrack(t); } catch { /* ignore */ }
-        }
-      });
       if (!stream.getTracks().some(t => t.id === event.track.id)) {
         stream.addTrack(event.track);
       }
+      remoteStreams.current[targetUserId] = stream;
 
       event.track.onended = () => {
         console.debug(`[CameraBroadcast] Remote track ended (${event.track.kind})`);
@@ -243,15 +228,14 @@ export const CameraBroadcast: React.FC<CameraBroadcastProps> = ({
         console.debug(`[CameraBroadcast] Remote track unmuted (${event.track.kind})`);
         const s = remoteStreams.current[targetUserId];
         if (s && onStreamReadyRef.current) {
-          onStreamReadyRef.current(new MediaStream(s.getTracks()));
+          onStreamReadyRef.current(s);
         }
       };
 
       setIsConnecting(false);
       hasStreamReadyRef.current = true;
-      // Wrap in new MediaStream so React detects state reference change and mounts <video> srcObject!
       if (onStreamReadyRef.current) {
-        onStreamReadyRef.current(new MediaStream(stream.getTracks()));
+        onStreamReadyRef.current(stream);
       }
     };
 

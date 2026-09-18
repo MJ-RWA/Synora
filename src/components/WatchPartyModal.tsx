@@ -232,6 +232,8 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         sourceType,
         isLiveParty: sourceType === 'live',
         isLiveStreaming: sourceType === 'live',
+        isCameraActive: sourceType === 'live',
+        cameraHostId: sourceType === 'live' ? hostUid : null,
         netflixPlayback: netflixPlayback
       };
 
@@ -245,7 +247,9 @@ export const WatchPartyModal: React.FC<WatchPartyModalProps> = ({
         uid: hostUid,
         isHost: true,
         joinedAt: nowIso,
-        speaking: false
+        lastSeen: nowEpoch,
+        connectionStatus: 'online',
+        status: 'watching'
       }).catch((hostDocErr) => {
         console.warn('Initial host participant doc write note:', hostDocErr);
       });
